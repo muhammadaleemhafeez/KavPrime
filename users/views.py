@@ -9,21 +9,22 @@ from .models import User
 def register_user(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
-
+ 
     data = json.loads(request.body)
-
+ 
     user = User.objects.create(
         name=data.get("name"),
         email=data.get("email"),
         password=data.get("password"),
         role=data.get("role", "EMPLOYEE")
     )
-
+ 
     return JsonResponse({
         "message": "User registered successfully",
         "id": user.id,
         "role": user.role
     }, status=201)
+
 
 # add new user
 
