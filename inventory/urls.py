@@ -4,7 +4,8 @@ from .views import (
     update_inventory,
     delete_inventory,
     list_inventory,
-    issue_inventory
+    issue_inventory,
+    total_inventory,
 )
 
 urlpatterns = [
@@ -13,5 +14,5 @@ urlpatterns = [
     path('delete/', delete_inventory),
     path('list/', list_inventory),
     path('issue/', issue_inventory),
-
+    path('total/', total_inventory, name='total-inventory'),
 ]

@@ -124,5 +124,33 @@ def issue_inventory(request):
         "remaining_stock": inventory.available_quantity
     })
 
+@csrf_exempt
+def total_inventory(request):
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
 
+    inventories = Inventory.objects.all()
 
+    total_items = inventories.count()
+    total_quantity = inventories.aggregate(
+        total=Sum('total_quantity')
+    )['total'] or 0
+
+    data = []
+    for item in inventories:
+        data.append({
+            "id": item.id,
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "category": item.category,
+            "brand": item.brand,
+            "model": item.model,
+            "total_quantity": item.total_quantity,
+            "minimum_stock_level": item.minimum_stock_level,
+        })
+
+    return JsonResponse({
+        "total_items": total_items,
+        "total_quantity": total_quantity,
+        "inventory_list": data
+    })
