@@ -122,3 +122,24 @@ def delete_user(request):
     user.delete()
 
     return JsonResponse({"message": "User deleted successfully"})
+
+@csrf_exempt
+def get_all_users(request):
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+
+    users = User.objects.all()
+
+    users_list = []
+    for user in users:
+        users_list.append({
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+        })
+
+    return JsonResponse({
+        "total_users": len(users_list),
+        "users": users_list
+    }, status=200)
