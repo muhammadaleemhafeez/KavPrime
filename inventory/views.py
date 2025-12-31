@@ -2,6 +2,13 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Inventory
+from django.utils import timezone
+from django.db import transaction
+
+from .models import Inventory, AssetDetails
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 from users.models import User
 
@@ -86,71 +93,78 @@ def list_inventory(request):
     return JsonResponse(list(inventories), safe=False)
 
 
-
-
 @csrf_exempt
+@transaction.atomic
 def issue_inventory(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
 
-    data = json.loads(request.body)
-
-    inventory_id = data.get("inventory_id")
-    user_id = data.get("user_id")
-    quantity = data.get("quantity")
-
     try:
-        inventory = Inventory.objects.get(id=inventory_id)
+        data = json.loads(request.body)
+
+        inventory_id = data.get("inventory_id")
+        employee_id = data.get("employee_id")
+        issued_by_id = data.get("issued_by_id")
+        quantity_issued = data.get("quantity_issued")
+
+        # 🔹 Basic validation
+        if not all([inventory_id, employee_id, issued_by_id, quantity_issued]):
+            return JsonResponse(
+                {"error": "inventory_id, employee_id, issued_by_id, quantity_issued are required"},
+                status=400
+            )
+
+        quantity_issued = int(quantity_issued)
+        if quantity_issued <= 0:
+            return JsonResponse({"error": "quantity_issued must be greater than 0"}, status=400)
+
+        # 🔹 Fetch objects (locked row)
+        inventory = Inventory.objects.select_for_update().get(id=inventory_id)
+        employee = User.objects.get(id=employee_id)
+        issued_by = User.objects.get(id=issued_by_id)
+
+        # 🔹 Check availability
+        if inventory.available_quantity < quantity_issued:
+            return JsonResponse(
+                {"error": "Not enough inventory available"},
+                status=400
+            )
+
+        # 🔹 Update inventory quantities
+        inventory.available_quantity -= quantity_issued
+        inventory.issued_quantity += quantity_issued
+
+        # 🔹 Update inventory status
+        if inventory.available_quantity == 0:
+            inventory.status = "OUT_OF_STOCK"
+        elif inventory.available_quantity <= inventory.minimum_stock_level:
+            inventory.status = "LOW_STOCK"
+        else:
+            inventory.status = "AVAILABLE"
+
+        inventory.save()
+
+        # 🔹 Create asset record
+        asset = AssetDetails.objects.create(
+            inventory=inventory,
+            user=employee,
+            quantity_issued=quantity_issued,
+            quantity_issued_date=timezone.now(),
+            issued_by=issued_by,
+            status="ISSUED"
+        )
+
+        return JsonResponse({
+            "message": "Inventory issued successfully",
+            "asset_id": asset.id,
+            "remaining_quantity": inventory.available_quantity
+        }, status=201)
+
     except Inventory.DoesNotExist:
         return JsonResponse({"error": "Inventory not found"}, status=404)
 
-    if inventory.available_quantity < quantity:
-        return JsonResponse({"error": "Insufficient stock"}, status=400)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
 
-    # Auto update quantities
-    inventory.available_quantity -= quantity
-    inventory.issued_quantity += quantity
-
-    # Update status
-    if inventory.available_quantity == 0:
-        inventory.status = "OUT_OF_STOCK"
-    elif inventory.available_quantity <= inventory.minimum_stock_level:
-        inventory.status = "LOW_STOCK"
-
-    inventory.save()
-
-    return JsonResponse({
-        "message": "Inventory issued successfully",
-        "remaining_stock": inventory.available_quantity
-    })
-
-@csrf_exempt
-def total_inventory(request):
-    if request.method != "GET":
-        return JsonResponse({"error": "GET method required"}, status=405)
-
-    inventories = Inventory.objects.all()
-
-    total_items = inventories.count()
-    total_quantity = inventories.aggregate(
-        total=Sum('total_quantity')
-    )['total'] or 0
-
-    data = []
-    for item in inventories:
-        data.append({
-            "id": item.id,
-            "item_code": item.item_code,
-            "item_name": item.item_name,
-            "category": item.category,
-            "brand": item.brand,
-            "model": item.model,
-            "total_quantity": item.total_quantity,
-            "minimum_stock_level": item.minimum_stock_level,
-        })
-
-    return JsonResponse({
-        "total_items": total_items,
-        "total_quantity": total_quantity,
-        "inventory_list": data
-    })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

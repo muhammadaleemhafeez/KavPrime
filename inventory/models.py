@@ -1,4 +1,9 @@
 from django.db import models
+from django.contrib.auth import get_user_model  # recommended for custom user
+
+# Get the User model dynamically
+User = get_user_model()
+
 
 class Inventory(models.Model):
 
@@ -34,4 +39,49 @@ class Inventory(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.remaining_quantity} - {self.item_name}"
+        return f"{self.available_quantity} - {self.item_name}"
+
+
+class AssetDetails(models.Model):
+
+    STATUS_CHOICES = (
+        ('ISSUED', 'Issued'),
+        ('RETURNED', 'Returned'),
+        ('DAMAGED', 'Damaged'),
+    )
+
+    inventory = models.ForeignKey(
+        Inventory,
+        on_delete=models.CASCADE
+    )
+
+    User = models.ForeignKey(
+        User,  # use get_user_model() User here
+        on_delete=models.CASCADE,
+        related_name='assets_received'
+    )
+
+    quantity_issued = models.PositiveIntegerField()
+    quantity_issued_date = models.DateTimeField()
+
+    return_date = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='ISSUED'
+    )
+
+    remarks = models.TextField(blank=True, null=True)
+
+    issued_by = models.ForeignKey(
+        User,  # use get_user_model() User here
+        on_delete=models.CASCADE,
+        related_name='assets_issued'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
