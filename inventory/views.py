@@ -4,11 +4,8 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import Inventory
 from django.utils import timezone
 from django.db import transaction
-
 from .models import Inventory, AssetDetails
-from django.contrib.auth import get_user_model
 
-User = get_user_model()
 
 from users.models import User
 
@@ -47,27 +44,73 @@ def update_inventory(request):
     if request.method != "PUT":
         return JsonResponse({"error": "PUT method required"}, status=405)
 
-    data = json.loads(request.body)
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
     inventory_id = data.get("id")
+
+    # Validate inventory_id is provided
+    if not inventory_id:
+        return JsonResponse({"error": "Inventory ID is required"}, status=400)
 
     try:
         inventory = Inventory.objects.get(id=inventory_id)
     except Inventory.DoesNotExist:
         return JsonResponse({"error": "Inventory not found"}, status=404)
 
+    # Get the new total_quantity if being updated
+    new_total_quantity = data.get("total_quantity", inventory.total_quantity)
+    
+    # 🔹 CRITICAL VALIDATION: Total quantity cannot be less than issued quantity
+    if new_total_quantity < inventory.issued_quantity:
+        return JsonResponse({
+            "error": f"Total quantity ({new_total_quantity}) cannot be less than already issued quantity ({inventory.issued_quantity})"
+        }, status=400)
+    
+    # 🔹 Validate total_quantity is not negative
+    if new_total_quantity < 0:
+        return JsonResponse({
+            "error": "Total quantity cannot be negative"
+        }, status=400)
+
+    # Update basic fields
     inventory.item_name = data.get("item_name", inventory.item_name)
     inventory.category = data.get("category", inventory.category)
     inventory.brand = data.get("brand", inventory.brand)
     inventory.model = data.get("model", inventory.model)
     inventory.description = data.get("description", inventory.description)
-    inventory.minimum_stock_level = data.get(
-        "minimum_stock_level", inventory.minimum_stock_level
-    )
+    inventory.minimum_stock_level = data.get("minimum_stock_level", inventory.minimum_stock_level)
+    inventory.purchase_date = data.get("purchase_date", inventory.purchase_date)
+    inventory.purchase_price_per_item = data.get("purchase_price_per_item", inventory.purchase_price_per_item)
+    inventory.vendor_name = data.get("vendor_name", inventory.vendor_name)
+    
+    # Update total_quantity
+    inventory.total_quantity = new_total_quantity
+    
+    # 🔹 AUTO-CALCULATE available_quantity (don't allow manual override)
+    # Available = Total - Issued
+    inventory.available_quantity = inventory.total_quantity - inventory.issued_quantity
+    
+    # 🔹 Update status based on available quantity
+    if inventory.available_quantity == 0:
+        inventory.status = "OUT_OF_STOCK"
+    elif inventory.available_quantity <= inventory.minimum_stock_level:
+        inventory.status = "LOW_STOCK"
+    else:
+        inventory.status = "AVAILABLE"
 
     inventory.save()
 
-    return JsonResponse({"message": "Inventory updated successfully"})
-
+    return JsonResponse({
+        "message": "Inventory updated successfully",
+        "inventory_id": inventory.id,
+        "total_quantity": inventory.total_quantity,
+        "available_quantity": inventory.available_quantity,
+        "issued_quantity": inventory.issued_quantity,
+        "status": inventory.status
+    })
 
 @csrf_exempt
 def delete_inventory(request):
@@ -168,3 +211,166 @@ def issue_inventory(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+# Add to your existing inventory/views.py
+
+@csrf_exempt
+def list_assets(request):
+    """Get all asset details"""
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+    
+    assets = AssetDetails.objects.select_related('inventory', 'user', 'issued_by').all()
+    
+    assets_list = []
+    for asset in assets:
+        assets_list.append({
+            "id": asset.id,
+            "inventory_id": asset.inventory.id,
+            "inventory_name": asset.inventory.item_name,
+            "inventory_code": asset.inventory.item_code,
+            "brand": asset.inventory.brand,
+            "model": asset.inventory.model,
+            "employee_id": asset.user.id,
+            "employee_name": asset.user.name,
+            "employee_email": asset.user.email,
+            "quantity_issued": asset.quantity_issued,
+            "quantity_issued_date": asset.quantity_issued_date.isoformat(),
+            "return_date": asset.return_date.isoformat() if asset.return_date else None,
+            "status": asset.status,
+            "remarks": asset.remarks,
+            "issued_by_id": asset.issued_by.id,
+            "issued_by_name": asset.issued_by.name,
+            "created_at": asset.created_at.isoformat(),
+            "updated_at": asset.updated_at.isoformat(),
+        })
+    
+    return JsonResponse({
+        "total_assets": len(assets_list),
+        "assets": assets_list
+    }, safe=False)
+
+
+@csrf_exempt
+def get_employee_assets(request, employee_id):
+    """Get all assets issued to a specific employee"""
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+    
+    try:
+        employee = User.objects.get(id=employee_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "Employee not found"}, status=404)
+    
+    assets = AssetDetails.objects.select_related('inventory', 'issued_by').filter(user=employee)
+    
+    assets_list = []
+    for asset in assets:
+        assets_list.append({
+            "id": asset.id,
+            "inventory_id": asset.inventory.id,
+            "inventory_name": asset.inventory.item_name,
+            "inventory_code": asset.inventory.item_code,
+            "brand": asset.inventory.brand,
+            "model": asset.inventory.model,
+            "quantity_issued": asset.quantity_issued,
+            "quantity_issued_date": asset.quantity_issued_date.isoformat(),
+            "return_date": asset.return_date.isoformat() if asset.return_date else None,
+            "status": asset.status,
+            "remarks": asset.remarks,
+            "issued_by_id": asset.issued_by.id,
+            "issued_by_name": asset.issued_by.name,
+            "created_at": asset.created_at.isoformat(),
+            "updated_at": asset.updated_at.isoformat(),
+        })
+    
+    return JsonResponse({
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "employee_email": employee.email,
+        "total_assets": len(assets_list),
+        "assets": assets_list
+    }, safe=False)
+
+
+@csrf_exempt
+def get_inventory_assets(request, inventory_id):
+    """Get all assets for a specific inventory item"""
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+    
+    try:
+        inventory = Inventory.objects.get(id=inventory_id)
+    except Inventory.DoesNotExist:
+        return JsonResponse({"error": "Inventory not found"}, status=404)
+    
+    assets = AssetDetails.objects.select_related('user', 'issued_by').filter(inventory=inventory)
+    
+    assets_list = []
+    for asset in assets:
+        assets_list.append({
+            "id": asset.id,
+            "employee_id": asset.user.id,
+            "employee_name": asset.user.name,
+            "employee_email": asset.user.email,
+            "quantity_issued": asset.quantity_issued,
+            "quantity_issued_date": asset.quantity_issued_date.isoformat(),
+            "return_date": asset.return_date.isoformat() if asset.return_date else None,
+            "status": asset.status,
+            "remarks": asset.remarks,
+            "issued_by_id": asset.issued_by.id,
+            "issued_by_name": asset.issued_by.name,
+            "created_at": asset.created_at.isoformat(),
+            "updated_at": asset.updated_at.isoformat(),
+        })
+    
+    return JsonResponse({
+        "inventory_id": inventory.id,
+        "inventory_name": inventory.item_name,
+        "inventory_code": inventory.item_code,
+        "total_issued": inventory.issued_quantity,
+        "total_assets": len(assets_list),
+        "assets": assets_list
+    }, safe=False)
+
+
+@csrf_exempt
+def get_asset_detail(request, asset_id):
+    """Get single asset detail by ID"""
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+    
+    try:
+        asset = AssetDetails.objects.select_related('inventory', 'user', 'issued_by').get(id=asset_id)
+    except AssetDetails.DoesNotExist:
+        return JsonResponse({"error": "Asset not found"}, status=404)
+    
+    return JsonResponse({
+        "id": asset.id,
+        "inventory": {
+            "id": asset.inventory.id,
+            "name": asset.inventory.item_name,
+            "code": asset.inventory.item_code,
+            "brand": asset.inventory.brand,
+            "model": asset.inventory.model,
+            "category": asset.inventory.category,
+        },
+        "employee": {
+            "id": asset.user.id,
+            "name": asset.user.name,
+            "email": asset.user.email,
+            "role": asset.user.role,
+        },
+        "quantity_issued": asset.quantity_issued,
+        "quantity_issued_date": asset.quantity_issued_date.isoformat(),
+        "return_date": asset.return_date.isoformat() if asset.return_date else None,
+        "status": asset.status,
+        "remarks": asset.remarks,
+        "issued_by": {
+            "id": asset.issued_by.id,
+            "name": asset.issued_by.name,
+            "email": asset.issued_by.email,
+        },
+        "created_at": asset.created_at.isoformat(),
+        "updated_at": asset.updated_at.isoformat(),
+    })

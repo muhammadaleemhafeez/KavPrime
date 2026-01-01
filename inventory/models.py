@@ -1,9 +1,5 @@
 from django.db import models
-from django.contrib.auth import get_user_model  # recommended for custom user
-
-# Get the User model dynamically
-User = get_user_model()
-
+from users.models import User
 
 class Inventory(models.Model):
 
@@ -55,8 +51,8 @@ class AssetDetails(models.Model):
         on_delete=models.CASCADE
     )
 
-    User = models.ForeignKey(
-        User,  # use get_user_model() User here
+    user = models.ForeignKey(  # ← Changed from 'User' to 'user'
+        User,
         on_delete=models.CASCADE,
         related_name='assets_received'
     )
@@ -78,7 +74,7 @@ class AssetDetails(models.Model):
     remarks = models.TextField(blank=True, null=True)
 
     issued_by = models.ForeignKey(
-        User,  # use get_user_model() User here
+        User,
         on_delete=models.CASCADE,
         related_name='assets_issued'
     )

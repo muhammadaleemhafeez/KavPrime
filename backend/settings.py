@@ -49,6 +49,10 @@ DATABASES = {
     }
 }
 
+# ✅ ADD THIS LINE - Tell Django to use your custom User model
+AUTH_USER_MODEL = 'users.User'
+
+
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 STATIC_URL = 'static/'
