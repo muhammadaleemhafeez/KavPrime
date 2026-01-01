@@ -1,4 +1,5 @@
 from django.db import models
+from users.models import User
 
 class Inventory(models.Model):
 
@@ -34,4 +35,49 @@ class Inventory(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.remaining_quantity} - {self.item_name}"
+        return f"{self.available_quantity} - {self.item_name}"
+
+
+class AssetDetails(models.Model):
+
+    STATUS_CHOICES = (
+        ('ISSUED', 'Issued'),
+        ('RETURNED', 'Returned'),
+        ('DAMAGED', 'Damaged'),
+    )
+
+    inventory = models.ForeignKey(
+        Inventory,
+        on_delete=models.CASCADE
+    )
+
+    user = models.ForeignKey(  # ← Changed from 'User' to 'user'
+        User,
+        on_delete=models.CASCADE,
+        related_name='assets_received'
+    )
+
+    quantity_issued = models.PositiveIntegerField()
+    quantity_issued_date = models.DateTimeField()
+
+    return_date = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='ISSUED'
+    )
+
+    remarks = models.TextField(blank=True, null=True)
+
+    issued_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='assets_issued'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
