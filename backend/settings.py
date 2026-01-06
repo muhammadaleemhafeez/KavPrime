@@ -6,7 +6,7 @@ SECRET_KEY = 'django-insecure-hardcoded-key'
 
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'corsheaders',
@@ -86,4 +86,12 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
+
+CELERY_BEAT_SCHEDULE = {
+    "escalate-team-pmo-overdue": {
+        "task": "tickets.tasks.escalate_team_pmo_overdue",
+        "schedule": 60.0,  # every 60 seconds
+    }
+}
 

@@ -1,10 +1,12 @@
 import json
+from datetime import timedelta
+
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from .models import Ticket
-from users.models import User
 from django.utils import timezone
-from .models import AssignedTicket
+from django.views.decorators.csrf import csrf_exempt
+
+from .models import Ticket, AssignedTicket
+from users.models import User
 
 
 @csrf_exempt
@@ -12,9 +14,10 @@ def create_ticket(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
 
+    # ✅ request.body is bytes, decode it properly
     try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
+        data = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     employee_id = data.get("employee_id")
@@ -23,14 +26,17 @@ def create_ticket(request):
     description = data.get("description")
 
     if not employee_id or not ticket_type or not title or not description:
-        return JsonResponse({"error": "employee_id, ticket_type, title, description are required"}, status=400)
+        return JsonResponse(
+            {"error": "employee_id, ticket_type, title, description are required"},
+            status=400
+        )
 
     try:
         employee = User.objects.get(id=employee_id)
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    # Create ticket
+    # ✅ Create ticket with 4-hour SLA for TEAM_PMO action
     ticket = Ticket.objects.create(
         employee=employee,
         ticket_type=ticket_type,
@@ -38,10 +44,10 @@ def create_ticket(request):
         description=description,
         status="PENDING_TEAM_PMO",
         created_by_role=employee.role,
-        team_pmo_deadline=timezone.now() + timezone.timedelta(hours=2)  # example SLA
+        team_pmo_deadline=timezone.now() + timedelta(hours=4)  # ✅ 4 hours
     )
 
-    # Assign to TEAM_PMO automatically (first TEAM_PMO user)
+    # ✅ Assign to TEAM_PMO automatically (first TEAM_PMO user)
     team_pmo = User.objects.filter(role="TEAM_PMO").first()
 
     if team_pmo:
@@ -54,7 +60,7 @@ def create_ticket(request):
             action_date=timezone.now()
         )
     else:
-        # If no TEAM_PMO exists, still log creation event
+        # ✅ If no TEAM_PMO exists, still log creation event
         AssignedTicket.objects.create(
             ticket=ticket,
             assigned_to=employee,
@@ -68,6 +74,7 @@ def create_ticket(request):
         "message": "Ticket created successfully",
         "ticket_id": ticket.id
     }, status=201)
+
 
 def list_tickets(request):
     tickets = Ticket.objects.all().values(
@@ -122,12 +129,16 @@ def update_ticket_status(request):
         "message": f"Status updated to '{new_status}' for {tickets.count()} ticket(s)"
     }, status=200)
 
+from django.http import JsonResponse
+from .models import AssignedTicket
 
-def ticket_history(request, ticket_id):
+def ticket_history(request, employee_id):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
 
-    history = AssignedTicket.objects.filter(ticket_id=ticket_id).order_by("action_date").values(
+    history = AssignedTicket.objects.filter(
+        assigned_to_id=employee_id
+    ).order_by("action_date").values(
         "id",
         "ticket_id",
         "assigned_to_id",

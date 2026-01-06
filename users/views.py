@@ -45,7 +45,8 @@ def login_user(request):
 
         dashboard_map = {
             "EMPLOYEE": "/employee/dashboard",
-            "PMO": "/pmo/dashboard",
+            "TEAM_PMO": "/team-pmo/dashboard",       # ✅ NEW
+            "SENIOR_PMO": "/senior-pmo/dashboard",   # ✅ renamed from PMO
             "ADMIN": "/admin/dashboard",
             "FINANCE": "/finance/dashboard",
         }
@@ -54,7 +55,7 @@ def login_user(request):
             "message": "Login successful",
             "user_id": user.id,
             "role": user.role,
-            "redirect_url": dashboard_map[user.role]
+            "redirect_url": dashboard_map.get(user.role)
         })
 
     except User.DoesNotExist:

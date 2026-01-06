@@ -10,7 +10,8 @@ urlpatterns = [
     # path('update-ticket-status/', views.update_ticket_status, name='update_ticket_status'),
 
     # ✅ add this
-    path('ticket-history/<int:ticket_id>/', views.ticket_history, name='ticket_history'),
+    path("ticket-history/<int:employee_id>/", views.ticket_history, name="ticket-history"),
+
     path('escalate/<int:ticket_id>/', views.escalate_ticket, name='escalate_ticket'),
 
 
