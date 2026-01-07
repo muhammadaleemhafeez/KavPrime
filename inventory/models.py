@@ -1,6 +1,8 @@
 from django.db import models
 from users.models import User
 
+from django.db import models
+
 class Inventory(models.Model):
 
     STATUS_CHOICES = (
@@ -30,6 +32,13 @@ class Inventory(models.Model):
     purchase_date = models.DateField()
     purchase_price_per_item = models.DecimalField(max_digits=10, decimal_places=2)
     vendor_name = models.CharField(max_length=100)
+
+    # ✅ NEW FIELD
+    attachment = models.ImageField(
+        upload_to="inventory_attachments/",
+        null=True,
+        blank=True
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

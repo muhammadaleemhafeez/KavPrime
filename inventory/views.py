@@ -5,18 +5,41 @@ from .models import Inventory
 from django.utils import timezone
 from django.db import transaction
 from .models import Inventory, AssetDetails
-
-
+from django.views.decorators.http import require_POST
 from users.models import User
+
+# image processing
+from .models import Inventory
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}  # jpeg covers jpg + jpeg
 
 # add inventtory
 
 @csrf_exempt
+@require_POST
 def add_inventory(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
+    # form-data fields
+    data = request.POST
 
-    data = json.loads(request.body)
+    # uploaded file
+    attachment = request.FILES.get("attachment")
+
+    # validate image type
+    if attachment and attachment.content_type not in ALLOWED_IMAGE_TYPES:
+        return JsonResponse(
+            {"error": "Only jpg, jpeg, and png files are allowed."},
+            status=400
+        )
+
+    # Convert numeric fields safely
+    try:
+        total_qty = int(data.get("total_quantity", 0))
+        minimum_stock = int(data.get("minimum_stock_level", 0))
+    except ValueError:
+        return JsonResponse(
+            {"error": "total_quantity and minimum_stock_level must be integers."},
+            status=400
+        )
 
     inventory = Inventory.objects.create(
         item_code=data.get("item_code"),
@@ -25,18 +48,20 @@ def add_inventory(request):
         brand=data.get("brand"),
         model=data.get("model"),
         description=data.get("description"),
-        total_quantity=data.get("total_quantity"),
-        available_quantity=data.get("total_quantity"),
-        minimum_stock_level=data.get("minimum_stock_level"),
+        total_quantity=total_qty,
+        available_quantity=total_qty,
+        minimum_stock_level=minimum_stock,
         purchase_date=data.get("purchase_date"),
         purchase_price_per_item=data.get("purchase_price_per_item"),
         vendor_name=data.get("vendor_name"),
+        attachment=attachment,   # ✅ saves file
     )
 
     return JsonResponse({
         "message": "Inventory added successfully",
-        "inventory_id": inventory.id
-    })
+        "inventory_id": inventory.id,
+        "attachment": inventory.attachment.url if inventory.attachment else None
+    }, status=201)
 
 
 @csrf_exempt

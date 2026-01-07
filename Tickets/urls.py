@@ -14,5 +14,9 @@ urlpatterns = [
 
     path('escalate/<int:ticket_id>/', views.escalate_ticket, name='escalate_ticket'),
 
+    # below for email process
+
+    path("team-pmo-action/<int:ticket_id>/", views.team_pmo_action),
+    path("admin-complete/<int:ticket_id>/", views.admin_complete),
 
 ]

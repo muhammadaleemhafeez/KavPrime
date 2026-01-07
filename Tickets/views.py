@@ -8,6 +8,8 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import Ticket, AssignedTicket
 from users.models import User
 
+from .services import notify, get_emails_by_role
+
 
 @csrf_exempt
 def create_ticket(request):
@@ -188,3 +190,95 @@ def escalate_ticket(request, ticket_id):
         "new_status": ticket.status,
         "assigned_to": senior.id
     }, status=200)
+
+# team_pmo action regarding email below code 
+
+@csrf_exempt
+def team_pmo_action(request, ticket_id):
+    """
+    POST JSON:
+    { "action": "APPROVE" }
+    OR
+    { "action": "REJECT", "reason": "Not allowed" }
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    action = (data.get("action") or "").upper()
+    reason = data.get("reason", "")
+
+    try:
+        ticket = Ticket.objects.select_related("employee").get(id=ticket_id)
+    except Ticket.DoesNotExist:
+        return JsonResponse({"error": "Ticket not found"}, status=404)
+
+    if ticket.status != "PENDING_TEAM_PMO":
+        return JsonResponse({"error": f"Ticket is not pending TEAM_PMO. Current: {ticket.status}"}, status=400)
+
+    if action == "APPROVE":
+        ticket.status = "PENDING_ADMIN"
+        ticket.save(update_fields=["status"])
+
+        # email to Admin
+        admin_emails = get_emails_by_role("ADMIN")
+        notify(
+            admin_emails,
+            f"Ticket Approved by TEAM_PMO (#{ticket.id})",
+            f"TEAM_PMO approved ticket #{ticket.id}.\nEmployee: {ticket.employee.email}\nPlease proceed."
+        )
+
+        return JsonResponse({"message": "Ticket approved by TEAM_PMO", "new_status": ticket.status})
+
+    if action == "REJECT":
+        ticket.status = "REJECTED_BY_TEAM_PMO"
+        ticket.save(update_fields=["status"])
+
+        # email to Employee
+        if getattr(ticket.employee, "email", None):
+            notify(
+                ticket.employee.email,
+                f"Ticket Rejected (#{ticket.id})",
+                f"Your ticket #{ticket.id} was rejected by TEAM_PMO.\nReason: {reason}"
+            )
+
+        return JsonResponse({"message": "Ticket rejected by TEAM_PMO", "new_status": ticket.status})
+
+    return JsonResponse({"error": "Invalid action. Use APPROVE or REJECT"}, status=400)
+
+# email process of admin email (PMO,hr,employee)
+
+
+@csrf_exempt
+def admin_complete(request, ticket_id):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        ticket = Ticket.objects.select_related("employee").get(id=ticket_id)
+    except Ticket.DoesNotExist:
+        return JsonResponse({"error": "Ticket not found"}, status=404)
+
+    if ticket.status != "PENDING_ADMIN":
+        return JsonResponse({"error": f"Ticket is not pending ADMIN. Current: {ticket.status}"}, status=400)
+
+    ticket.status = "COMPLETED"
+    ticket.save(update_fields=["status"])
+
+    team_pmo_emails = get_emails_by_role("TEAM_PMO")
+    hr_emails = get_emails_by_role("HR")
+    employee_email = getattr(ticket.employee, "email", None)
+
+    recipients = list(set(team_pmo_emails + hr_emails + ([employee_email] if employee_email else [])))
+
+    notify(
+        recipients,
+        f"Ticket Completed (#{ticket.id})",
+        f"Ticket #{ticket.id} has been completed and handed over.\nEmployee: {employee_email}"
+    )
+
+    return JsonResponse({"message": "Ticket completed", "new_status": ticket.status})
