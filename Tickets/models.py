@@ -76,6 +76,15 @@ class Ticket(models.Model):
 
     escalation_deadline = models.DateTimeField(null=True, blank=True)
 
+    # ✅ NEW: Assigned_to field (linking the ticket to a user)
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,  # Set to null if the assigned user is deleted
+        related_name="assigned_tickets",  # A reverse relation from the User model
+        null=True,
+        blank=True,
+    )
+
     # ✅ NEW (dynamic workflow fields - safe)
     workflow = models.ForeignKey(Workflow, on_delete=models.PROTECT, null=True, blank=True)
     current_step = models.PositiveIntegerField(default=0)  # 0 means "not using workflow yet"

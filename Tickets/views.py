@@ -17,9 +17,9 @@ from .services import route_new_ticket, approve, reject, add_history
 @require_http_methods(["POST"])
 def create_ticket(request):
     """
-    Employee creates ticket:
+    Employee creates a ticket:
     - Creates Ticket
-    - Routes it using workflow engine (admin-configurable)
+    - Routes it using the workflow engine (admin-configurable)
     - Sends emails automatically inside services
     """
     try:
@@ -27,11 +27,16 @@ def create_ticket(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
+    # Existing fields (no change)
     employee_id = data.get("employee_id")
     ticket_type = data.get("ticket_type")
     title = data.get("title")
     description = data.get("description")
 
+    # New field (assigned_to)
+    assigned_to_id = data.get("assigned_to")  # New field for assigned user
+
+    # Ensure all required fields are present
     if not employee_id or not ticket_type or not title or not description:
         return JsonResponse(
             {"error": "employee_id, ticket_type, title, description are required"},
@@ -43,24 +48,36 @@ def create_ticket(request):
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
+    # If assigned_to is provided, get that user, otherwise leave it as null
+    assigned_to = None
+    if assigned_to_id:
+        try:
+            assigned_to = User.objects.get(id=assigned_to_id)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "Assigned user not found"}, status=404)
+
+    # Create the ticket
     ticket = Ticket.objects.create(
         employee=employee,
         ticket_type=ticket_type,
         title=title,
         description=description,
-        status="PENDING_TEAM_PMO",  # default, will be overwritten by workflow engine if configured
+        assigned_to=assigned_to,  # Assign to the selected user (if any)
+        status="PENDING_TEAM_PMO",  # Default, will be overwritten by workflow engine if configured
         created_by_role=employee.role_name if hasattr(employee, "role_name") else employee.role,
     )
 
-    # ✅ route ticket using engine (workflow if exists, else fallback to old hardcoded)
+    # Route ticket using the engine (workflow if exists, else fallback to old hardcoded logic)
     try:
-        route_new_ticket(ticket)
+        route_new_ticket(ticket)  # Using your service to handle the routing logic
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
+    # Return the created ticket data (including assigned_to)
     return JsonResponse({
         "message": "Ticket created successfully",
         "ticket_id": ticket.id,
+        "assigned_to": ticket.assigned_to.id if ticket.assigned_to else None,  # Return the assigned user (if any)
         "status": ticket.status,
         "current_role": ticket.current_role,
         "current_step": ticket.current_step,

@@ -24,4 +24,8 @@ urlpatterns = [
     path("workflows/create/", views_workflow.create_workflow, name="create_workflow"),
     path("workflows/<int:workflow_id>/steps/add/", views_workflow.add_workflow_step, name="add_workflow_step"),
     path("workflows/<int:workflow_id>/activate/", views_workflow.activate_workflow, name="activate_workflow"),
+
+     # ✅ Workflow fecching first role base on is_active is true
+    path("workflows/active/step1-role/", views_workflow.active_workflow_step1_role, name="active_step1_role"),
+
 ]
