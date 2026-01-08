@@ -6,6 +6,14 @@ from django.contrib.auth.models import (
     PermissionsMixin
 )
 
+class Role(models.Model):
+    name = models.CharField(max_length=50, unique=True)  # e.g. EMPLOYEE, TEAM_PMO, HR
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -13,7 +21,7 @@ class UserManager(BaseUserManager):
 
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
-        user.set_password(password)  # hashes password
+        user.set_password(password)
         user.save(using=self._db)
         return user
 
@@ -32,20 +40,30 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
-    ("EMPLOYEE", "Employee"),
-    ("TEAM_PMO", "Team PMO"),
-    ("SENIOR_PMO", "Senior PMO"),
-    ("ADMIN", "Admin"),
-    ("FINANCE", "Finance"),
-]
-
+        ("EMPLOYEE", "Employee"),
+        ("TEAM_PMO", "Team PMO"),
+        ("SENIOR_PMO", "Senior PMO"),
+        ("ADMIN", "Admin"),
+        ("FINANCE", "Finance"),
+    ]
 
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
+
+    # ✅ Keep existing role field (so old code keeps working)
     role = models.CharField(
         max_length=20,
         choices=ROLE_CHOICES,
         default="EMPLOYEE",
+    )
+
+    # ✅ NEW: Dynamic role reference (Admin can add roles)
+    role_obj = models.ForeignKey(
+        Role,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="users",
     )
 
     is_active = models.BooleanField(default=True)
@@ -57,4 +75,16 @@ class User(AbstractBaseUser, PermissionsMixin):
     REQUIRED_FIELDS = ["name"]
 
     def __str__(self):
-        return f"{self.email} - {self.role}"
+        return f"{self.email} - {self.role_name}"
+
+    @property
+    def role_name(self):
+        # Prefer dynamic role if present, else fallback to old string role
+        return self.role_obj.name if self.role_obj else self.role
+
+    def save(self, *args, **kwargs):
+        # ✅ Auto-create Role if role_obj not set but role string exists
+        if not self.role_obj and self.role:
+            role_rec, _ = Role.objects.get_or_create(name=self.role)
+            self.role_obj = role_rec
+        super().save(*args, **kwargs)

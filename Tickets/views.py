@@ -4,19 +4,24 @@ from datetime import timedelta
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 
 from .models import Ticket, AssignedTicket
 from users.models import User
 
-from .services import notify, get_emails_by_role
+# ✅ use your services engine (dynamic workflow + fallback)
+from .services import route_new_ticket, approve, reject, add_history
 
 
 @csrf_exempt
+@require_http_methods(["POST"])
 def create_ticket(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
-    # ✅ request.body is bytes, decode it properly
+    """
+    Employee creates ticket:
+    - Creates Ticket
+    - Routes it using workflow engine (admin-configurable)
+    - Sends emails automatically inside services
+    """
     try:
         data = json.loads(request.body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -38,46 +43,32 @@ def create_ticket(request):
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    # ✅ Create ticket with 4-hour SLA for TEAM_PMO action
     ticket = Ticket.objects.create(
         employee=employee,
         ticket_type=ticket_type,
         title=title,
         description=description,
-        status="PENDING_TEAM_PMO",
-        created_by_role=employee.role,
-        team_pmo_deadline=timezone.now() + timedelta(hours=4)  # ✅ 4 hours
+        status="PENDING_TEAM_PMO",  # default, will be overwritten by workflow engine if configured
+        created_by_role=employee.role_name if hasattr(employee, "role_name") else employee.role,
     )
 
-    # ✅ Assign to TEAM_PMO automatically (first TEAM_PMO user)
-    team_pmo = User.objects.filter(role="TEAM_PMO").first()
-
-    if team_pmo:
-        AssignedTicket.objects.create(
-            ticket=ticket,
-            assigned_to=team_pmo,
-            role="TEAM_PMO",
-            status="ASSIGNED",
-            remarks="Auto assigned on ticket creation",
-            action_date=timezone.now()
-        )
-    else:
-        # ✅ If no TEAM_PMO exists, still log creation event
-        AssignedTicket.objects.create(
-            ticket=ticket,
-            assigned_to=employee,
-            role="EMPLOYEE",
-            status="ASSIGNED",
-            remarks="Ticket created but no TEAM_PMO user found",
-            action_date=timezone.now()
-        )
+    # ✅ route ticket using engine (workflow if exists, else fallback to old hardcoded)
+    try:
+        route_new_ticket(ticket)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
 
     return JsonResponse({
         "message": "Ticket created successfully",
-        "ticket_id": ticket.id
+        "ticket_id": ticket.id,
+        "status": ticket.status,
+        "current_role": ticket.current_role,
+        "current_step": ticket.current_step,
+        "workflow_id": ticket.workflow_id,
     }, status=201)
 
 
+@require_http_methods(["GET"])
 def list_tickets(request):
     tickets = Ticket.objects.all().values(
         "id",
@@ -86,21 +77,26 @@ def list_tickets(request):
         "title",
         "description",
         "status",
-        "created_at"
+        "created_by_role",
+        "workflow_id",
+        "current_step",
+        "current_role",
+        "created_at",
+        "updated_at",
     )
-
     return JsonResponse(list(tickets), safe=False)
 
 
-
 @csrf_exempt
+@require_http_methods(["PUT"])
 def update_ticket_status(request):
-    if request.method != "PUT":
-        return JsonResponse({"error": "PUT method required"}, status=405)
-
+    """
+    Your existing endpoint:
+    Updates all tickets status for employee (kept as is)
+    """
     try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
+        data = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     employee_id = data.get("employee_id")
@@ -109,18 +105,15 @@ def update_ticket_status(request):
     if not employee_id or not new_status:
         return JsonResponse({"error": "employee_id and status are required"}, status=400)
 
-    # Check if employee exists
     try:
         employee = User.objects.get(id=employee_id)
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    # Update all tickets of this employee
     tickets = Ticket.objects.filter(employee=employee)
     if not tickets.exists():
         return JsonResponse({"error": "No tickets found for this employee"}, status=404)
 
-    # Validate the new status
     valid_statuses = [choice[0] for choice in Ticket.STATUS_CHOICES]
     if new_status not in valid_statuses:
         return JsonResponse({"error": f"Invalid status. Valid statuses are {valid_statuses}"}, status=400)
@@ -131,13 +124,13 @@ def update_ticket_status(request):
         "message": f"Status updated to '{new_status}' for {tickets.count()} ticket(s)"
     }, status=200)
 
-from django.http import JsonResponse
-from .models import AssignedTicket
 
+@require_http_methods(["GET"])
 def ticket_history(request, employee_id):
-    if request.method != "GET":
-        return JsonResponse({"error": "GET method required"}, status=405)
-
+    """
+    Returns history rows assigned_to this employee_id
+    URL: /ticket-history/<employee_id>/
+    """
     history = AssignedTicket.objects.filter(
         assigned_to_id=employee_id
     ).order_by("action_date").values(
@@ -149,39 +142,39 @@ def ticket_history(request, employee_id):
         "remarks",
         "action_date",
     )
-
     return JsonResponse(list(history), safe=False)
 
 
-
+@require_http_methods(["GET"])
 def escalate_ticket(request, ticket_id):
-    if request.method != "GET":
-        return JsonResponse({"error": "GET method required"}, status=405)
-
+    """
+    Manual escalation endpoint (kept).
+    For dynamic workflows, we simply log and notify senior (or move status).
+    """
     try:
         ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    # Only allow escalation from TEAM_PMO -> SENIOR_PMO
-    if ticket.status != "PENDING_TEAM_PMO":
-        return JsonResponse({"error": f"Ticket is not in PENDING_TEAM_PMO. Current: {ticket.status}"}, status=400)
+    # If already completed/rejected, don't escalate
+    if ticket.status in ["COMPLETED", "REJECTED"]:
+        return JsonResponse({"error": f"Ticket is {ticket.status}, cannot escalate."}, status=400)
 
-    senior = User.objects.filter(role="SENIOR_PMO").first()
+    senior = User.objects.filter(role="SENIOR_PMO").first() or User.objects.filter(role_obj__name="SENIOR_PMO").first()
     if not senior:
         return JsonResponse({"error": "No SENIOR_PMO user found"}, status=400)
 
+    # Keep your old behavior
     ticket.status = "PENDING_SENIOR_PMO"
     ticket.team_pmo_deadline = None
-    ticket.save()
+    ticket.save(update_fields=["status", "team_pmo_deadline"])
 
-    AssignedTicket.objects.create(
+    add_history(
         ticket=ticket,
         assigned_to=senior,
         role="SENIOR_PMO",
         status="ESCALATED",
-        remarks="Manually escalated via API",
-        action_date=timezone.now()
+        remarks="Manually escalated via API"
     )
 
     return JsonResponse({
@@ -191,94 +184,93 @@ def escalate_ticket(request, ticket_id):
         "assigned_to": senior.id
     }, status=200)
 
-# team_pmo action regarding email below code 
+
+# ---------------------------
+# EMAIL PROCESS ENDPOINTS
+# ---------------------------
 
 @csrf_exempt
+@require_http_methods(["POST"])
 def team_pmo_action(request, ticket_id):
     """
-    POST JSON:
-    { "action": "APPROVE" }
-    OR
-    { "action": "REJECT", "reason": "Not allowed" }
+    URL: /team-pmo-action/<ticket_id>/
+    Body:
+      { "action": "APPROVE", "remarks": "..." }
+      OR
+      { "action": "REJECT", "remarks": "..." }
     """
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
     try:
         data = json.loads(request.body.decode("utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     action = (data.get("action") or "").upper()
-    reason = data.get("reason", "")
+    remarks = data.get("remarks") or data.get("reason") or ""
+
+    if action not in ["APPROVE", "REJECT"]:
+        return JsonResponse({"error": "action must be APPROVE or REJECT"}, status=400)
+
+    # For now actor is the first TEAM_PMO user
+    actor = User.objects.filter(role="TEAM_PMO").first() or User.objects.filter(role_obj__name="TEAM_PMO").first()
+    if not actor:
+        return JsonResponse({"error": "No TEAM_PMO user found"}, status=400)
 
     try:
-        ticket = Ticket.objects.select_related("employee").get(id=ticket_id)
+        ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    if ticket.status != "PENDING_TEAM_PMO":
-        return JsonResponse({"error": f"Ticket is not pending TEAM_PMO. Current: {ticket.status}"}, status=400)
+    # Optional check: only allow if ticket pending TEAM_PMO
+    if not ticket.status.startswith("PENDING_"):
+        return JsonResponse({"error": f"Ticket is not pending. Current status: {ticket.status}"}, status=400)
 
-    if action == "APPROVE":
-        ticket.status = "PENDING_ADMIN"
-        ticket.save(update_fields=["status"])
-
-        # email to Admin
-        admin_emails = get_emails_by_role("ADMIN")
-        notify(
-            admin_emails,
-            f"Ticket Approved by TEAM_PMO (#{ticket.id})",
-            f"TEAM_PMO approved ticket #{ticket.id}.\nEmployee: {ticket.employee.email}\nPlease proceed."
-        )
-
-        return JsonResponse({"message": "Ticket approved by TEAM_PMO", "new_status": ticket.status})
-
-    if action == "REJECT":
-        ticket.status = "REJECTED_BY_TEAM_PMO"
-        ticket.save(update_fields=["status"])
-
-        # email to Employee
-        if getattr(ticket.employee, "email", None):
-            notify(
-                ticket.employee.email,
-                f"Ticket Rejected (#{ticket.id})",
-                f"Your ticket #{ticket.id} was rejected by TEAM_PMO.\nReason: {reason}"
-            )
-
-        return JsonResponse({"message": "Ticket rejected by TEAM_PMO", "new_status": ticket.status})
-
-    return JsonResponse({"error": "Invalid action. Use APPROVE or REJECT"}, status=400)
-
-# email process of admin email (PMO,hr,employee)
+    try:
+        if action == "APPROVE":
+            approve(ticket, actor, remarks=remarks)
+            return JsonResponse({"message": "Ticket approved", "ticket_id": ticket.id, "status": ticket.status})
+        else:
+            reject(ticket, actor, remarks=remarks)
+            return JsonResponse({"message": "Ticket rejected", "ticket_id": ticket.id, "status": ticket.status})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
 
 
 @csrf_exempt
+@require_http_methods(["POST"])
 def admin_complete(request, ticket_id):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
+    """
+    URL: /admin-complete/<ticket_id>/
+    Body: { "remarks": "Item handed over" }
+
+    This will call approve() using ADMIN actor.
+    In workflow engine:
+      - if ADMIN is last step => COMPLETED
+      - if not last step => moves to next (e.g. FINANCE)
+    """
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        data = {}
+
+    remarks = data.get("remarks", "Completed by Admin")
+
+    actor = User.objects.filter(role="ADMIN").first() or User.objects.filter(role_obj__name="ADMIN").first()
+    if not actor:
+        return JsonResponse({"error": "No ADMIN user found"}, status=400)
 
     try:
-        ticket = Ticket.objects.select_related("employee").get(id=ticket_id)
+        ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    if ticket.status != "PENDING_ADMIN":
-        return JsonResponse({"error": f"Ticket is not pending ADMIN. Current: {ticket.status}"}, status=400)
-
-    ticket.status = "COMPLETED"
-    ticket.save(update_fields=["status"])
-
-    team_pmo_emails = get_emails_by_role("TEAM_PMO")
-    hr_emails = get_emails_by_role("HR")
-    employee_email = getattr(ticket.employee, "email", None)
-
-    recipients = list(set(team_pmo_emails + hr_emails + ([employee_email] if employee_email else [])))
-
-    notify(
-        recipients,
-        f"Ticket Completed (#{ticket.id})",
-        f"Ticket #{ticket.id} has been completed and handed over.\nEmployee: {employee_email}"
-    )
-
-    return JsonResponse({"message": "Ticket completed", "new_status": ticket.status})
+    try:
+        approve(ticket, actor, remarks=remarks)
+        return JsonResponse({
+            "message": "Admin completed/approved step",
+            "ticket_id": ticket.id,
+            "status": ticket.status,
+            "current_step": ticket.current_step,
+            "current_role": ticket.current_role,
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)

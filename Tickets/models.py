@@ -1,6 +1,37 @@
+# Tickets/models.py
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+
+from users.models import Role
+
+
+class Workflow(models.Model):
+    ticket_type = models.CharField(max_length=50, default="DEFAULT")  # repair/new_item/general or DEFAULT
+    version = models.PositiveIntegerField(default=1)
+    is_active = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("ticket_type", "version")
+
+    def __str__(self):
+        return f"{self.ticket_type} v{self.version} {'(ACTIVE)' if self.is_active else ''}"
+
+
+class WorkflowStep(models.Model):
+    workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
+    step_order = models.PositiveIntegerField()
+    role = models.ForeignKey(Role, on_delete=models.PROTECT)
+    sla_hours = models.PositiveIntegerField(default=4)
+
+    class Meta:
+        unique_together = ("workflow", "step_order")
+        ordering = ["step_order"]
+
+    def __str__(self):
+        return f"{self.workflow} | Step {self.step_order} -> {self.role.name} (SLA {self.sla_hours}h)"
 
 
 class Ticket(models.Model):
@@ -29,6 +60,7 @@ class Ticket(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField()
 
+    # ✅ keep current status system intact for now
     status = models.CharField(
         max_length=30,
         choices=STATUS_CHOICES,
@@ -36,22 +68,26 @@ class Ticket(models.Model):
         db_index=True,
     )
 
-    # TEAM PMO must act before this deadline, otherwise auto-escalate
     team_pmo_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
-
-    created_by_role = models.CharField(max_length=30, blank=True)  # EMPLOYEE / TEAM_PMO / SENIOR_PMO
+    created_by_role = models.CharField(max_length=30, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Optional
     escalation_deadline = models.DateTimeField(null=True, blank=True)
 
+    # ✅ NEW (dynamic workflow fields - safe)
+    workflow = models.ForeignKey(Workflow, on_delete=models.PROTECT, null=True, blank=True)
+    current_step = models.PositiveIntegerField(default=0)  # 0 means "not using workflow yet"
+    step_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
+    current_role = models.CharField(max_length=50, null=True, blank=True)
+
     class Meta:
-        db_table = "tickets_ticket"  # optional; remove if you want Django default
+        db_table = "tickets_ticket"
         indexes = [
             models.Index(fields=["status", "team_pmo_deadline"]),
             models.Index(fields=["employee"]),
+            models.Index(fields=["step_deadline"]),
         ]
 
     def __str__(self):
@@ -65,8 +101,8 @@ class AssignedTicket(models.Model):
         ("REJECTED", "Rejected"),
         ("ESCALATED", "Escalated"),
         ("COMPLETED", "Completed"),
-        ("STATUS_UPDATED", "Status Updated"),   # added (useful for logging changes)
-        ("AUTO_ESCALATED", "Auto Escalated"),   # added (for 4-hour auto shift)
+        ("STATUS_UPDATED", "Status Updated"),
+        ("AUTO_ESCALATED", "Auto Escalated"),
     ]
 
     ticket = models.ForeignKey(
@@ -83,14 +119,8 @@ class AssignedTicket(models.Model):
         db_index=True,
     )
 
-    role = models.CharField(max_length=30)  # TEAM_PMO / SENIOR_PMO / ADMIN
-
-    status = models.CharField(
-        max_length=20,
-        choices=ACTION_STATUS,
-        default="ASSIGNED",
-        db_index=True,
-    )
+    role = models.CharField(max_length=30)  # store role name text (safe)
+    status = models.CharField(max_length=20, choices=ACTION_STATUS, default="ASSIGNED", db_index=True)
 
     remarks = models.TextField(blank=True)
     action_date = models.DateTimeField(default=timezone.now, db_index=True)
