@@ -3,22 +3,33 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import User
 
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+
 #registration of user
 
 @csrf_exempt
 def register_user(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
- 
+    
     data = json.loads(request.body)
- 
+    
+    # Handle profile image (optional)
+    profile_image = None
+    if 'profile_image' in request.FILES:
+        profile_image = request.FILES['profile_image']
+    
     user = User.objects.create(
         name=data.get("name"),
         email=data.get("email"),
-        password=data.get("password"),
-        role=data.get("role", "EMPLOYEE")
+        role=data.get("role", "EMPLOYEE"),
+        designation=data.get("designation", ""),
+        profile_image=profile_image
     )
- 
+    user.set_password(data.get("password"))
+    user.save()
+
     return JsonResponse({
         "message": "User registered successfully",
         "id": user.id,
@@ -87,6 +98,12 @@ def update_user(request):
     user.email = data.get("email", user.email)
     user.password = data.get("password", user.password)
     user.role = data.get("role", user.role)
+    user.designation = data.get("designation", user.designation)
+
+
+    # Handle profile image update
+    if 'profile_image' in request.FILES:
+        user.profile_image = request.FILES['profile_image']
 
     user.save()
 
@@ -95,7 +112,8 @@ def update_user(request):
         "user_id": user.id,
         "name": user.name,
         "email": user.email,
-        "role": user.role
+        "role": user.role,
+        "designation": user.designation
     })
 
 
@@ -143,4 +161,40 @@ def get_all_users(request):
     return JsonResponse({
         "total_users": len(users_list),
         "users": users_list
+    }, status=200)
+
+
+
+@csrf_exempt
+def upload_employee_image(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+    
+    # Get employee ID from the request
+    employee_id = request.POST.get("id")
+    
+    if not employee_id:
+        return JsonResponse({"error": "Employee ID is required"}, status=400)
+
+    try:
+        # Get the employee from the database
+        user = User.objects.get(id=employee_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    # Check if the image file is in the request
+    if 'profile_image' not in request.FILES:
+        return JsonResponse({"error": "No image file provided"}, status=400)
+
+    # Get the image file
+    profile_image = request.FILES['profile_image']
+    
+    # Save the image to the model
+    user.profile_image = profile_image
+    user.save()
+
+    return JsonResponse({
+        "message": "Image uploaded successfully",
+        "user_id": user.id,
+        "profile_image_url": user.profile_image.url
     }, status=200)

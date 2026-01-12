@@ -69,6 +69,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
+    # For storing the employee's designation
+    designation = models.CharField(max_length=100, blank=True, null=True)  
+
+    # For storing the employee's image
+    profile_image = models.ImageField(upload_to='profile_images/', blank=True, null=True)  
+
     objects = UserManager()
 
     USERNAME_FIELD = "email"
