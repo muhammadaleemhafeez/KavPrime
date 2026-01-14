@@ -7,7 +7,9 @@ from users.models import Role
 
 
 class Workflow(models.Model):
-    ticket_type = models.CharField(max_length=50, default="DEFAULT")  # repair/new_item/general or DEFAULT
+
+    # repair/new_item/general or DEFAULT
+    ticket_type = models.CharField(max_length=50, default="DEFAULT")  
     version = models.PositiveIntegerField(default=1)
     is_active = models.BooleanField(default=False)
 
@@ -50,17 +52,19 @@ class Ticket(models.Model):
         ("COMPLETED", "Completed"),
     ]
 
+    # Foreign Key to the employee (User model)
     employee = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="tickets",
     )
 
+    # Ticket fields
     ticket_type = models.CharField(max_length=20, choices=TICKET_TYPES)
     title = models.CharField(max_length=200)
     description = models.TextField()
 
-    # ✅ keep current status system intact for now
+    # ✅ Ticket status
     status = models.CharField(
         max_length=30,
         choices=STATUS_CHOICES,
@@ -68,6 +72,7 @@ class Ticket(models.Model):
         db_index=True,
     )
 
+    # Deadlines and role-related fields
     team_pmo_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
     created_by_role = models.CharField(max_length=30, blank=True)
 
@@ -76,7 +81,7 @@ class Ticket(models.Model):
 
     escalation_deadline = models.DateTimeField(null=True, blank=True)
 
-    # ✅ NEW: Assigned_to field (linking the ticket to a user)
+    # ✅ # New: Assigned user
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,  # Set to null if the assigned user is deleted

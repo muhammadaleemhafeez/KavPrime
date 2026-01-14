@@ -145,12 +145,11 @@ def update_ticket_status(request):
 @require_http_methods(["GET"])
 def ticket_history(request, employee_id):
     """
-    Returns history rows assigned_to this employee_id
-    URL: /ticket-history/<employee_id>/
+    Returns the ticket history for an employee based on assigned tickets and status changes
+    URL: /api/tickets/ticket-history/<employee_id>/
     """
-    history = AssignedTicket.objects.filter(
-        assigned_to_id=employee_id
-    ).order_by("action_date").values(
+    # Fetch all AssignedTicket records for this employee, ordered by the action date
+    history = AssignedTicket.objects.filter(assigned_to_id=employee_id).order_by("action_date").values(
         "id",
         "ticket_id",
         "assigned_to_id",
@@ -159,8 +158,13 @@ def ticket_history(request, employee_id):
         "remarks",
         "action_date",
     )
-    return JsonResponse(list(history), safe=False)
 
+    # If no history records are found for the given employee
+    if not history.exists():
+        return JsonResponse({"message": "No history found for this employee"}, status=200)
+
+    # Return the list of history records as a JSON response
+    return JsonResponse(list(history), safe=False, status=200)
 
 @require_http_methods(["GET"])
 def escalate_ticket(request, ticket_id):
