@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import register_user, login_user, update_user, delete_user, get_all_users, upload_employee_image
 from . import views_roles
+from . import views
 
 urlpatterns = [
     path("register/", register_user, name="register"),
@@ -8,6 +9,9 @@ urlpatterns = [
     path("update/", update_user),
     path("delete/", delete_user),
     path("getUsers/", get_all_users),
+    path("mark-exited/", views.mark_employee_exited),
+    path("upload-image/", views.upload_employee_image),
+    
 
     # New API for image upload
     path("upload_image/", upload_employee_image, name="upload_image"),  

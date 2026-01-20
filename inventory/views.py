@@ -8,6 +8,7 @@ from .models import Inventory, AssetDetails
 from django.views.decorators.http import require_POST
 from users.models import User
 
+
 # image processing
 from .models import Inventory
 
@@ -399,3 +400,72 @@ def get_asset_detail(request, asset_id):
         "created_at": asset.created_at.isoformat(),
         "updated_at": asset.updated_at.isoformat(),
     })
+
+
+@csrf_exempt
+@transaction.atomic
+def return_asset(request):
+    """
+    Return a single issued asset.
+    RETURNED -> increments available and decrements issued
+    DAMAGED  -> does not increment stock (recommended)
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        asset_id = data.get("asset_id")
+        status = data.get("status", "RETURNED")
+        remarks = data.get("remarks", "")
+
+        if not asset_id:
+            return JsonResponse({"error": "asset_id is required"}, status=400)
+
+        if status not in ["RETURNED", "DAMAGED"]:
+            return JsonResponse({"error": "status must be RETURNED or DAMAGED"}, status=400)
+
+        asset = AssetDetails.objects.select_for_update().select_related("inventory").get(id=asset_id)
+
+        # if already closed
+        if asset.status in ["RETURNED", "DAMAGED"]:
+            return JsonResponse({"message": "Asset already closed", "asset_id": asset.id}, status=200)
+
+        inventory = Inventory.objects.select_for_update().get(id=asset.inventory_id)
+
+        # Close asset
+        asset.status = status
+        asset.return_date = timezone.now()
+        if remarks:
+            asset.remarks = remarks
+        asset.save(update_fields=["status", "return_date", "remarks", "updated_at"])
+
+        # Stock update only on RETURNED
+        if status == "RETURNED":
+            Inventory.objects.filter(id=inventory.id).update(
+                available_quantity=F("available_quantity") + asset.quantity_issued,
+                issued_quantity=F("issued_quantity") - asset.quantity_issued,
+            )
+            inventory.refresh_from_db()
+
+            if inventory.available_quantity == 0:
+                inventory.status = "OUT_OF_STOCK"
+            elif inventory.available_quantity <= inventory.minimum_stock_level:
+                inventory.status = "LOW_STOCK"
+            else:
+                inventory.status = "AVAILABLE"
+            inventory.save(update_fields=["status", "updated_at"])
+
+        return JsonResponse({
+            "message": f"Asset marked as {status}",
+            "asset_id": asset.id,
+            "inventory_id": inventory.id,
+        }, status=200)
+
+    except AssetDetails.DoesNotExist:
+        return JsonResponse({"error": "Asset not found"}, status=404)
+    except Inventory.DoesNotExist:
+        return JsonResponse({"error": "Inventory not found"}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+

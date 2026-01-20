@@ -48,6 +48,13 @@ class User(AbstractBaseUser, PermissionsMixin):
         ("HR", "HR"),
     ]
 
+    EMPLOYMENT_STATUS_CHOICES = [
+        ("ONBOARDING", "Onboarding"),
+        ("ACTIVE", "Active"),
+        ("OFFBOARDING", "Offboarding"),
+        ("EXITED", "Exited"),
+    ]
+
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
 
@@ -75,6 +82,15 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     # For storing the employee's image
     profile_image = models.ImageField(upload_to='profile_images/', blank=True, null=True)  
+
+    # ✅ NEW (minimal onboarding/offboarding)
+    employment_status = models.CharField(
+        max_length=20,
+        choices=EMPLOYMENT_STATUS_CHOICES,
+        default="ONBOARDING"
+    )
+    join_date = models.DateField(null=True, blank=True)
+    exit_date = models.DateField(null=True, blank=True)
 
     objects = UserManager()
 

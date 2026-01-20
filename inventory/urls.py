@@ -1,4 +1,5 @@
 from django.urls import path
+from . import views
 from .views import (
     add_inventory,
     update_inventory,
@@ -21,4 +22,6 @@ urlpatterns = [
     path('assets/employee/<int:employee_id>/', get_employee_assets, name='employee_assets'),
     path('assets/inventory/<int:inventory_id>/', get_inventory_assets, name='inventory_assets'),
     path('assets/<int:asset_id>/', get_asset_detail, name='asset_detail'),
+
+    path("return-asset/", views.return_asset),
 ]
