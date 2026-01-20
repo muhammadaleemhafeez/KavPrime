@@ -60,6 +60,7 @@ def login_user(request):
             "SENIOR_PMO": "/senior-pmo/dashboard",   # ✅ renamed from PMO
             "ADMIN": "/admin/dashboard",
             "FINANCE": "/finance/dashboard",
+            "HR": "/hr/dashboard",
         }
 
         return JsonResponse({

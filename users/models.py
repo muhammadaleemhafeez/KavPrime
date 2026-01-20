@@ -45,6 +45,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ("SENIOR_PMO", "Senior PMO"),
         ("ADMIN", "Admin"),
         ("FINANCE", "Finance"),
+        ("HR", "HR"),
     ]
 
     name = models.CharField(max_length=100)
