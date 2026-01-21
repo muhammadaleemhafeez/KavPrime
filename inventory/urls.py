@@ -20,7 +20,8 @@ urlpatterns = [
     path('issue/', issue_inventory, name='issue_inventory'),
     path('assets/', list_assets, name='list_assets'),
     path('assets/employee/<int:employee_id>/', get_employee_assets, name='employee_assets'),
-    path('assets/inventory/<int:inventory_id>/', get_inventory_assets, name='inventory_assets'),
+    # path('assets/inventory/<int:inventory_id>/', get_inventory_assets, name='inventory_assets'),
+    path("inventory-assets/<int:inventory_id>/", views.get_inventory_assets),
     path('assets/<int:asset_id>/', get_asset_detail, name='asset_detail'),
 
     path("return-asset/", views.return_asset),
