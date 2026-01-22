@@ -96,28 +96,32 @@ def login_user(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
 
-    data = json.loads(request.body)
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
     email = data.get("email")
     password = data.get("password")
+
+    if not email or not password:
+        return JsonResponse({"error": "email and password are required"}, status=400)
 
     try:
         user = User.objects.get(email=email)
 
-        if user.password != password:
-            return JsonResponse({"error": "Invalid password"}, status=401)
-        
         # ✅ Block exited/inactive accounts
         if not user.is_active or user.employment_status == "EXITED":
             return JsonResponse({"error": "Account is inactive / exited"}, status=403)
 
-        # # ✅ Correct password check (IMPORTANT)
-        # if not user.check_password(password):
-        #     return JsonResponse({"error": "Invalid password"}, status=401)
+        # ✅ Correct password verification (works for ALL users)
+        if not user.check_password(password):
+            return JsonResponse({"error": "Invalid password"}, status=401)
 
         dashboard_map = {
             "EMPLOYEE": "/employee/dashboard",
-            "TEAM_PMO": "/team-pmo/dashboard",       # ✅ NEW
-            "SENIOR_PMO": "/senior-pmo/dashboard",   # ✅ renamed from PMO
+            "TEAM_PMO": "/team-pmo/dashboard",
+            "SENIOR_PMO": "/senior-pmo/dashboard",
             "ADMIN": "/admin/dashboard",
             "FINANCE": "/finance/dashboard",
             "HR": "/hr/dashboard",
@@ -129,7 +133,7 @@ def login_user(request):
             "role": user.role,
             "employment_status": user.employment_status,
             "redirect_url": dashboard_map.get(user.role)
-        })
+        }, status=200)
 
     except User.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
