@@ -184,7 +184,9 @@ def update_user(request):
         "email": user.email,
         "role": user.role,
         "designation": user.designation,
-        "employment_status": user.employment_status
+        "designation": user.designation, 
+        "employment_status": user.employment_status,
+        "join_date": user.join_date.isoformat() if user.join_date else None 
     })
 
 
@@ -224,7 +226,9 @@ def get_all_users(request):
         "name": u.name,
         "email": u.email,
         "role": u.role,
+        "designation": u.designation,
         "employment_status": u.employment_status,
+        "join_date": u.join_date.isoformat() if u.join_date else None,
         "is_active": u.is_active
     } for u in users]
 
