@@ -101,8 +101,11 @@ def start_workflow(ticket):
     ticket.team_pmo_deadline = None  # stop old SLA if using workflow
 
     # Your User model has role_name property (recommended). If not, fallback safely:
-    creator_role = getattr(ticket.employee, "role_name", None) or getattr(ticket.employee, "role", "")
-    ticket.created_by_role = creator_role
+    
+    # creator_role = getattr(ticket.employee, "role_name", None) or getattr(ticket.employee, "role", "")
+    # ticket.created_by_role = creator_role
+
+    
 
     ticket.save(update_fields=[
         "workflow", "current_step", "current_role", "step_deadline",
@@ -128,7 +131,12 @@ def route_new_ticket(ticket):
     # ---------------------------
     # FALLBACK: your old routing
     # ---------------------------
-    creator_role = getattr(ticket.employee, "role_name", None) or ticket.employee.role
+
+    # creator_role = getattr(ticket.employee, "role_name", None) or ticket.employee.role
+    # ticket.created_by_role = creator_role
+
+    creator_role = (getattr(ticket.employee, "role", None) or getattr(ticket.employee, "role_name", None) or "")
+    creator_role = creator_role.strip().upper()
     ticket.created_by_role = creator_role
 
     if creator_role == "EMPLOYEE":

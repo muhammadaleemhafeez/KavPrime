@@ -3,6 +3,8 @@ from .views import register_user, login_user, update_user, delete_user, get_all_
 from . import views_roles
 from . import views
 
+from .views_roles import create_workflow_with_roles
+
 urlpatterns = [
     path("register/", register_user, name="register"),
     path("login/", login_user, name="login"),
@@ -20,4 +22,7 @@ urlpatterns = [
     path("roles/", views_roles.list_roles, name="list_roles"),
     path("roles/add/", views_roles.add_role, name="add_role"),
     path("roles/<int:role_id>/active/", views_roles.set_role_active, name="set_role_active"),
+
+    path("api/workflows/create-with-roles/", create_workflow_with_roles),
+    path("workflows/", views_roles.list_all_workflows, name="list_all_workflows"),
 ]

@@ -111,3 +111,16 @@ class User(AbstractBaseUser, PermissionsMixin):
             role_rec, _ = Role.objects.get_or_create(name=self.role)
             self.role_obj = role_rec
         super().save(*args, **kwargs)
+
+
+
+#create workflow with roles below
+class Workflow(models.Model):
+    name = models.CharField(max_length=150, unique=True)
+    description = models.TextField(blank=True, null=True)
+    roles = models.ManyToManyField(Role, related_name="workflows", blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name

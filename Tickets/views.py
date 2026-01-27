@@ -8,6 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 from .models import Ticket, AssignedTicket
 from users.models import User
+from Tickets.models import Ticket, Workflow 
 
 # ✅ use your services engine (dynamic workflow + fallback)
 from .services import route_new_ticket, approve, reject, add_history
