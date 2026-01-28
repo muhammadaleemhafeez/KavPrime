@@ -24,5 +24,5 @@ urlpatterns = [
     path("roles/<int:role_id>/active/", views_roles.set_role_active, name="set_role_active"),
 
     path("api/workflows/create-with-roles/", create_workflow_with_roles),
-    path("workflows/", views_roles.list_all_workflows, name="list_all_workflows"),
+    path("api/workflows/", views_roles.list_all_workflows, name="list_all_workflows"),
 ]
