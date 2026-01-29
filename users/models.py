@@ -114,7 +114,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 
-#create workflow with roles below
+#table of create workflow with roles below
 class Workflow(models.Model):
     name = models.CharField(max_length=150, unique=True)
     description = models.TextField(blank=True, null=True)

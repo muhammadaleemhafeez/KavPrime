@@ -3,6 +3,8 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 
+
+
 from users.models import Role
 
 
@@ -12,6 +14,9 @@ class Workflow(models.Model):
     ticket_type = models.CharField(max_length=50, default="DEFAULT")  
     version = models.PositiveIntegerField(default=1)
     is_active = models.BooleanField(default=False)
+
+    workflow_name = models.CharField(max_length=150, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 

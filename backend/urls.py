@@ -14,6 +14,9 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from Tickets.views_workflow import create_workflow_with_roles
+
+
 from django.contrib import admin
 from django.urls import path, include
 
@@ -23,11 +26,17 @@ from django.conf.urls.static import static
 urlpatterns = [
     path("admin/", admin.site.urls),
 
-    path("", include("users.urls")),   # ✅ IMPORTANT
+    # path("", include("users.urls")),   # ✅ IMPORTANT
 
     path("api/users/", include("users.urls")),
     path("api/tickets/", include("Tickets.urls")),
     path("api/inventory/", include("inventory.urls")),
+
+    # for dashbaord 
+    path("api/dashboard/", include("dashboard.urls")),
+
+    path("api/workflows/create-with-roles/", create_workflow_with_roles),
+
 ]
 
 if settings.DEBUG:

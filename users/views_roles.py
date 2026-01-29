@@ -8,10 +8,10 @@ from Tickets.models import Workflow  # adjust if your import path differs
 from users.models import Role        # ✅ Role is in users app
 
 # Workflow must exist in models.py
-from .models import Role, Workflow  
+from Tickets.models import Workflow as TicketWorkflow, WorkflowStep 
 
 # for all list of workflow 
-from .models import Role, Workflow
+from Tickets.models import Workflow as TicketWorkflow, WorkflowStep
 
 @csrf_exempt
 @csrf_exempt
@@ -67,132 +67,97 @@ def set_role_active(request, role_id):
     return JsonResponse({"id": role.id, "name": role.name, "is_active": role.is_active})
 
 
-# ✅ NEW API IN SAME FILE: Create Workflow + Attach Roles
+
 # ✅ NEW API IN SAME FILE: Create Workflow + Attach Roles
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_workflow_with_roles(request):
     """
-    Request JSON accepts:
-      - workflow_name (required)
-      - description (optional)
-      - role_id (optional single)
-      - role_name (optional single)
-      - role_ids (optional list)
-      - role_names (optional list)
+    Create workflow + steps dynamically.
 
-    Response:
-      - workflow_name
-      - description
-      - roles: [{id, name, is_active}, ...]
+    Body:
+    {
+      "ticket_type": "repair",
+      "version": 1,
+      "is_active": true,
+      "steps": [
+        {"role": "TEAM_PMO", "sla_hours": 4},
+        {"role": "SENIOR_PMO", "sla_hours": 8},
+        {"role": "ADMIN", "sla_hours": 24}
+      ]
+    }
     """
-
-    # Parse JSON
     try:
         data = json.loads(request.body.decode("utf-8"))
     except Exception:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    workflow_name = (data.get("workflow_name") or "").strip()
-    description = (data.get("description") or "").strip()
+    ticket_type = (data.get("ticket_type") or "DEFAULT").strip()
+    version = int(data.get("version", 1))
+    is_active = bool(data.get("is_active", False))
+    steps = data.get("steps") or []
 
-    if not workflow_name:
-        return JsonResponse({"error": "workflow_name is required"}, status=400)
+    if not isinstance(steps, list) or len(steps) == 0:
+        return JsonResponse({"error": "steps must be a non-empty list"}, status=400)
 
-    # role_ids / role_names can be lists
-    role_ids = data.get("role_ids") or []
-    role_names = data.get("role_names") or []
-
-    # also allow single role_id / role_name
-    single_role_id = data.get("role_id", None)
-    single_role_name = data.get("role_name", None)
-
-    # Validate list types
-    if role_ids and not isinstance(role_ids, list):
-        return JsonResponse({"error": "role_ids must be a list"}, status=400)
-
-    if role_names and not isinstance(role_names, list):
-        return JsonResponse({"error": "role_names must be a list"}, status=400)
-
-    if not isinstance(role_ids, list):
-        role_ids = []
-    if not isinstance(role_names, list):
-        role_names = []
-
-    # Add single inputs
-    if single_role_id is not None:
-        role_ids.append(single_role_id)
-    if single_role_name is not None:
-        role_names.append(single_role_name)
-
-    # Normalize role_ids to int
-    clean_role_ids = []
-    for rid in role_ids:
-        try:
-            clean_role_ids.append(int(rid))
-        except Exception:
-            return JsonResponse({"error": f"Invalid role_id: {rid}"}, status=400)
-
-    # Normalize role_names
-    clean_role_names = [str(x).strip() for x in role_names if str(x).strip()]
-
-    try:
-        with transaction.atomic():
-            # Create workflow (name is unique)
+    # Validate steps quickly
+    for i, s in enumerate(steps, start=1):
+        if not isinstance(s, dict):
+            return JsonResponse({"error": f"Step {i} must be object"}, status=400)
+        role_name = (s.get("role") or "").strip()
+        if not role_name:
+            return JsonResponse({"error": f"Step {i}: role is required"}, status=400)
+        if "sla_hours" in s:
             try:
-                workflow = Workflow.objects.create(
-                    name=workflow_name,
-                    description=description
-                )
-            except IntegrityError:
-                return JsonResponse(
-                    {"error": "Workflow with this name already exists"},
-                    status=409
-                )
+                int(s["sla_hours"])
+            except Exception:
+                return JsonResponse({"error": f"Step {i}: sla_hours must be int"}, status=400)
 
-            roles_to_attach = []
+    with transaction.atomic():
+        wf, created = Workflow.objects.get_or_create(
+            ticket_type=ticket_type,
+            version=version,
+            defaults={"is_active": is_active}
+        )
 
-            # Attach roles by IDs
-            if clean_role_ids:
-                existing_roles = list(Role.objects.filter(id__in=clean_role_ids))
-                found_ids = {r.id for r in existing_roles}
-                missing_ids = [rid for rid in clean_role_ids if rid not in found_ids]
-                if missing_ids:
-                    return JsonResponse(
-                        {"error": "Some role_ids not found", "missing_role_ids": missing_ids},
-                        status=404
-                    )
-                roles_to_attach.extend(existing_roles)
+        # Update active flag if needed
+        if wf.is_active != is_active:
+            wf.is_active = is_active
+            wf.save(update_fields=["is_active"])
 
-            # Create/get roles by Names
-            for name in clean_role_names:
-                try:
-                    role, _created = Role.objects.get_or_create(name=name)
-                except IntegrityError:
-                    role = Role.objects.get(name=name)
-                roles_to_attach.append(role)
+        # If activating this wf, deactivate others of same ticket_type
+        if wf.is_active:
+            Workflow.objects.filter(ticket_type=ticket_type).exclude(id=wf.id).update(is_active=False)
 
-            # De-duplicate roles
-            unique_roles = list({r.id: r for r in roles_to_attach}.values())
+        # Replace steps (simple + clean)
+        WorkflowStep.objects.filter(workflow=wf).delete()
 
-            # Attach to workflow (ManyToMany)
-            if unique_roles:
-                workflow.roles.add(*unique_roles)
+        out_steps = []
+        for idx, s in enumerate(steps, start=1):
+            role_name = s["role"].strip()
+            sla = int(s.get("sla_hours", 4))
 
-            roles_out = list(workflow.roles.all().values("id", "name", "is_active"))
+            role_obj, _ = Role.objects.get_or_create(name=role_name)
 
-            return JsonResponse(
-                {
-                    "workflow_name": workflow.name,
-                    "description": workflow.description,
-                    "roles": roles_out
-                },
-                status=201
+            st = WorkflowStep.objects.create(
+                workflow=wf,
+                step_order=idx,
+                role=role_obj,
+                sla_hours=sla
             )
+            out_steps.append({
+                "step_order": st.step_order,
+                "role": st.role.name,
+                "sla_hours": st.sla_hours
+            })
 
-    except Exception as e:
-        return JsonResponse({"error": "Server error", "details": str(e)}, status=500)
-
+    return JsonResponse({
+        "workflow_id": wf.id,
+        "ticket_type": wf.ticket_type,
+        "version": wf.version,
+        "is_active": wf.is_active,
+        "steps": out_steps
+    }, status=201 if created else 200)
 # show list of all workflow
 
 @csrf_exempt
@@ -200,21 +165,15 @@ def create_workflow_with_roles(request):
 def list_all_workflows(request):
     """
     Returns all workflows with their attached roles.
-    Response:
-    [
-      {
-        "workflow_id": 1,
-        "workflow_name": "testing",
-        "description": "Workflow for inventory approvals",
-        "roles": [{id, name}]
-      },
-      ...
-    ]
+    Only the most recent workflow is marked as active.
     """
 
     workflows = Workflow.objects.all().order_by("-id")
 
     response_data = []
+
+    # Identify most recent workflow
+    latest_workflow_id = workflows[0].id if workflows else None
 
     for workflow in workflows:
         roles = list(workflow.roles.all().values("id", "name"))
@@ -223,6 +182,7 @@ def list_all_workflows(request):
             "workflow_id": workflow.id,
             "workflow_name": workflow.name,
             "description": workflow.description,
+            "is_active": workflow.id == latest_workflow_id,  # ✅ key logic
             "roles": roles
         })
 

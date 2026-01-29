@@ -4,7 +4,9 @@ from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
 
-from .models import AssignedTicket, Workflow, WorkflowStep
+from .models import AssignedTicket, Workflow, WorkflowStep, Ticket
+
+from Tickets.models import AssignedTicket
 
 User = get_user_model()
 
@@ -64,10 +66,7 @@ def get_emails_by_role(role_name: str):
 # Workflow helpers
 # ---------------------------
 def get_active_workflow(ticket_type: str):
-    wf = Workflow.objects.filter(ticket_type=ticket_type, is_active=True).order_by("-version").first()
-    if not wf:
-        wf = Workflow.objects.filter(ticket_type="DEFAULT", is_active=True).order_by("-version").first()
-    return wf
+    return Workflow.objects.filter(ticket_type=ticket_type, is_active=True).order_by("-id").first()
 
 
 def get_step(workflow, step_order: int):
@@ -119,43 +118,64 @@ def start_workflow(ticket):
     return True
 
 
-def route_new_ticket(ticket):
-    """
-    Backward compatible entry point:
-    - If workflow exists, use it.
-    - Else fallback to your old hardcoded routing.
-    """
-    if start_workflow(ticket):
-        return
+def route_new_ticket(ticket: Ticket):
+    # ✅ GLOBAL selection (ignore ticket.ticket_type)
+    wf = get_active_workflow_global()
 
-    # ---------------------------
-    # FALLBACK: your old routing
-    # ---------------------------
-
-    # creator_role = getattr(ticket.employee, "role_name", None) or ticket.employee.role
-    # ticket.created_by_role = creator_role
-
-    creator_role = (getattr(ticket.employee, "role", None) or getattr(ticket.employee, "role_name", None) or "")
-    creator_role = creator_role.strip().upper()
-    ticket.created_by_role = creator_role
-
-    if creator_role == "EMPLOYEE":
-        team = get_first_by_role("TEAM_PMO")
-        if not team:
-            raise ValueError("No TEAM_PMO user found")
-
+    if not wf:
+        # fallback behavior if NO workflows exist in DB
         ticket.status = "PENDING_TEAM_PMO"
-        ticket.team_pmo_deadline = timezone.now() + timedelta(hours=SLA_HOURS_FALLBACK)
-        ticket.save(update_fields=["status", "team_pmo_deadline", "created_by_role"])
-
-        add_history(ticket, team, "TEAM_PMO", "ASSIGNED", "New ticket assigned to Team PMO")
-        notify(team.email, f"Ticket #{ticket.id} assigned to you", "A new ticket requires review.")
-        notify(ticket.employee.email, f"Ticket #{ticket.id} created", "Your ticket has been sent to Team PMO.")
+        ticket.current_role = "TEAM_PMO"
+        ticket.current_step = 1
+        ticket.workflow = None
+        ticket.step_deadline = None
+        ticket.save(update_fields=["status", "current_role", "current_step", "workflow", "step_deadline"])
         return
 
-    raise ValueError(f"Creator role '{creator_role}' is not allowed to create tickets.")
+    step1 = (
+        WorkflowStep.objects
+        .filter(workflow=wf, step_order=1)
+        .select_related("role")
+        .first()
+    )
+    if not step1:
+        raise Exception("Active workflow has no step 1")
 
+    role_name = step1.role.name
 
+    # Assign to first active user of that role (dynamic role_obj preferred, fallback to role string)
+    actor = (
+        User.objects.filter(is_active=True, role_obj__name=role_name).first()
+        or User.objects.filter(is_active=True, role=role_name).first()
+    )
+
+    ticket.workflow = wf
+    ticket.current_step = 1
+    ticket.current_role = role_name
+    ticket.status = f"PENDING_{role_name}"
+    ticket.step_deadline = timezone.now() + timedelta(hours=step1.sla_hours)
+    ticket.assigned_to = actor  # can be None
+    ticket.save()
+
+    # History row
+    if actor:
+        AssignedTicket.objects.create(
+            ticket=ticket,
+            assigned_to=actor,
+            role=role_name,
+            status="ASSIGNED",
+            remarks=f"Auto assigned via GLOBAL workflow step 1 (SLA {step1.sla_hours}h)"
+        )
+    else:
+        AssignedTicket.objects.create(
+            ticket=ticket,
+            assigned_to=ticket.employee,
+            role=role_name,
+            status="ASSIGNED",
+            remarks=f"No user found for role {role_name}. Ticket created but not assigned."
+        )
+
+        
 def approve(ticket, actor, remarks=""):
     """
     Approve using workflow steps if workflow is attached.
@@ -253,3 +273,8 @@ def reject(ticket, actor, remarks=""):
     ticket.save(update_fields=["status", "team_pmo_deadline", "step_deadline", "current_role"])
 
     notify(ticket.employee.email, f"Ticket #{ticket.id} rejected", f"Remarks: {remarks}")
+
+
+def get_active_workflow_global():
+    # ✅ GLOBAL: pick latest active workflow
+    return Workflow.objects.filter(is_active=True).order_by("-id").first()

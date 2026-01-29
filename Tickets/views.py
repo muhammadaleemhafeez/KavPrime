@@ -34,6 +34,15 @@ def create_ticket(request):
     title = data.get("title")
     description = data.get("description")
 
+    # ✅ STEP A: Validate ticket_type (VERY IMPORTANT)
+    valid_ticket_types = [choice[0] for choice in Ticket.TICKET_TYPES]
+    if ticket_type not in valid_ticket_types:
+        return JsonResponse({
+        "error": "Invalid ticket_type",
+        "allowed_ticket_types": valid_ticket_types
+        }, status=400)
+
+
     # New field (assigned_to)
     assigned_to_id = data.get("assigned_to")  # New field for assigned user
 
@@ -71,6 +80,8 @@ def create_ticket(request):
     # Route ticket using the engine (workflow if exists, else fallback to old hardcoded logic)
     try:
         route_new_ticket(ticket)  # Using your service to handle the routing logic
+        # ✅ STEP B: Refresh ticket from DB so workflow_id is visible
+        ticket.refresh_from_db()
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
