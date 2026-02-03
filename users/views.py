@@ -7,6 +7,8 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
+from Tickets.models import Workflow, WorkflowStep
+
 
 #registration of user
 @csrf_exempt
@@ -110,14 +112,15 @@ def login_user(request):
     try:
         user = User.objects.get(email=email)
 
-        # ✅ Block exited/inactive accounts
+        # Block inactive / exited users
         if not user.is_active or user.employment_status == "EXITED":
             return JsonResponse({"error": "Account is inactive / exited"}, status=403)
 
-        # ✅ Correct password verification (works for ALL users)
+        # Validate password
         if not user.check_password(password):
             return JsonResponse({"error": "Invalid password"}, status=401)
 
+        # Dashboard redirect mapping
         dashboard_map = {
             "EMPLOYEE": "/employee/dashboard",
             "TEAM_PMO": "/team-pmo/dashboard",
@@ -127,12 +130,38 @@ def login_user(request):
             "HR": "/hr/dashboard",
         }
 
+        # Normalize role
+        role_key = user.role.upper()
+
+        # Fetch latest active workflow
+        workflow = Workflow.objects.filter(is_active=True).order_by("-version").first()
+
+        workflow_data = None
+        if workflow:
+            steps = WorkflowStep.objects.filter(workflow=workflow).order_by("step_order")
+            workflow_data = {
+                "workflow_id": workflow.id,
+                "ticket_type": workflow.ticket_type,
+                "version": workflow.version,
+                "workflow_name": workflow.workflow_name,
+                "description": workflow.description,
+                "steps": [
+                    {
+                        "step_order": s.step_order,
+                        "role": s.role.name,
+                        "sla_hours": s.sla_hours
+                    }
+                    for s in steps
+                ]
+            }
+
         return JsonResponse({
             "message": "Login successful",
             "user_id": user.id,
             "role": user.role,
             "employment_status": user.employment_status,
-            "redirect_url": dashboard_map.get(user.role)
+            "redirect_url": dashboard_map.get(role_key),
+            "workflow": workflow_data  # 👈 Added here
         }, status=200)
 
     except User.DoesNotExist:
