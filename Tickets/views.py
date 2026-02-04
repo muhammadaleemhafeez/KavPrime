@@ -15,6 +15,7 @@ from Tickets.models import Ticket, Workflow
 from .services import route_new_ticket, approve, reject, add_history
 
 
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_ticket(request):
@@ -113,6 +114,8 @@ def create_ticket(request):
         "current_step": ticket.current_step,
         "workflow_id": ticket.workflow_id,
     }, status=201)
+
+
 
 @require_http_methods(["GET"])
 def list_tickets(request):
@@ -324,135 +327,135 @@ def ticket_history(request, employee_id=None, ticket_id=None):
         })
 
     return JsonResponse(response, safe=False, status=200)
-@require_http_methods(["GET"])
-def escalate_ticket(request, ticket_id):
-    """
-    Manual escalation endpoint (kept).
-    For dynamic workflows, we simply log and notify senior (or move status).
-    """
-    try:
-        ticket = Ticket.objects.get(id=ticket_id)
-    except Ticket.DoesNotExist:
-        return JsonResponse({"error": "Ticket not found"}, status=404)
+# @require_http_methods(["GET"])
+# def escalate_ticket(request, ticket_id):
+#     """
+#     Manual escalation endpoint (kept).
+#     For dynamic workflows, we simply log and notify senior (or move status).
+#     """
+#     try:
+#         ticket = Ticket.objects.get(id=ticket_id)
+#     except Ticket.DoesNotExist:
+#         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    # If already completed/rejected, don't escalate
-    if ticket.status in ["COMPLETED", "REJECTED"]:
-        return JsonResponse({"error": f"Ticket is {ticket.status}, cannot escalate."}, status=400)
+#     # If already completed/rejected, don't escalate
+#     if ticket.status in ["COMPLETED", "REJECTED"]:
+#         return JsonResponse({"error": f"Ticket is {ticket.status}, cannot escalate."}, status=400)
 
-    senior = User.objects.filter(role="SENIOR_PMO").first() or User.objects.filter(role_obj__name="SENIOR_PMO").first()
-    if not senior:
-        return JsonResponse({"error": "No SENIOR_PMO user found"}, status=400)
+#     senior = User.objects.filter(role="SENIOR_PMO").first() or User.objects.filter(role_obj__name="SENIOR_PMO").first()
+#     if not senior:
+#         return JsonResponse({"error": "No SENIOR_PMO user found"}, status=400)
 
-    # Keep your old behavior
-    ticket.status = "PENDING_SENIOR_PMO"
-    ticket.team_pmo_deadline = None
-    ticket.save(update_fields=["status", "team_pmo_deadline"])
+#     # Keep your old behavior
+#     ticket.status = "PENDING_SENIOR_PMO"
+#     ticket.team_pmo_deadline = None
+#     ticket.save(update_fields=["status", "team_pmo_deadline"])
 
-    add_history(
-        ticket=ticket,
-        assigned_to=senior,
-        role="SENIOR_PMO",
-        status="ESCALATED",
-        remarks="Manually escalated via API"
-    )
+#     add_history(
+#         ticket=ticket,
+#         assigned_to=senior,
+#         role="SENIOR_PMO",
+#         status="ESCALATED",
+#         remarks="Manually escalated via API"
+#     )
 
-    return JsonResponse({
-        "message": f"Ticket #{ticket.id} escalated to SENIOR_PMO",
-        "ticket_id": ticket.id,
-        "new_status": ticket.status,
-        "assigned_to": senior.id
-    }, status=200)
+#     return JsonResponse({
+#         "message": f"Ticket #{ticket.id} escalated to SENIOR_PMO",
+#         "ticket_id": ticket.id,
+#         "new_status": ticket.status,
+#         "assigned_to": senior.id
+#     }, status=200)
 
 
 # ---------------------------
 # EMAIL PROCESS ENDPOINTS
 # ---------------------------
 
-@csrf_exempt
-@require_http_methods(["POST"])
-def team_pmo_action(request, ticket_id):
-    """
-    URL: /team-pmo-action/<ticket_id>/
-    Body:
-      { "action": "APPROVE", "remarks": "..." }
-      OR
-      { "action": "REJECT", "remarks": "..." }
-    """
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
+# @csrf_exempt
+# @require_http_methods(["POST"])
+# def team_pmo_action(request, ticket_id):
+#     """
+#     URL: /team-pmo-action/<ticket_id>/
+#     Body:
+#       { "action": "APPROVE", "remarks": "..." }
+#       OR
+#       { "action": "REJECT", "remarks": "..." }
+#     """
+#     try:
+#         data = json.loads(request.body.decode("utf-8"))
+#     except (json.JSONDecodeError, UnicodeDecodeError):
+#         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    action = (data.get("action") or "").upper()
-    remarks = data.get("remarks") or data.get("reason") or ""
+#     action = (data.get("action") or "").upper()
+#     remarks = data.get("remarks") or data.get("reason") or ""
 
-    if action not in ["APPROVE", "REJECT"]:
-        return JsonResponse({"error": "action must be APPROVE or REJECT"}, status=400)
+#     if action not in ["APPROVE", "REJECT"]:
+#         return JsonResponse({"error": "action must be APPROVE or REJECT"}, status=400)
 
-    # For now actor is the first TEAM_PMO user
-    actor = User.objects.filter(role="TEAM_PMO").first() or User.objects.filter(role_obj__name="TEAM_PMO").first()
-    if not actor:
-        return JsonResponse({"error": "No TEAM_PMO user found"}, status=400)
+#     # For now actor is the first TEAM_PMO user
+#     actor = User.objects.filter(role="TEAM_PMO").first() or User.objects.filter(role_obj__name="TEAM_PMO").first()
+#     if not actor:
+#         return JsonResponse({"error": "No TEAM_PMO user found"}, status=400)
 
-    try:
-        ticket = Ticket.objects.get(id=ticket_id)
-    except Ticket.DoesNotExist:
-        return JsonResponse({"error": "Ticket not found"}, status=404)
+#     try:
+#         ticket = Ticket.objects.get(id=ticket_id)
+#     except Ticket.DoesNotExist:
+#         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    # Optional check: only allow if ticket pending TEAM_PMO
-    if not ticket.status.startswith("PENDING_"):
-        return JsonResponse({"error": f"Ticket is not pending. Current status: {ticket.status}"}, status=400)
+#     # Optional check: only allow if ticket pending TEAM_PMO
+#     if not ticket.status.startswith("PENDING_"):
+#         return JsonResponse({"error": f"Ticket is not pending. Current status: {ticket.status}"}, status=400)
 
-    try:
-        if action == "APPROVE":
-            approve(ticket, actor, remarks=remarks)
-            return JsonResponse({"message": "Ticket approved", "ticket_id": ticket.id, "status": ticket.status})
-        else:
-            reject(ticket, actor, remarks=remarks)
-            return JsonResponse({"message": "Ticket rejected", "ticket_id": ticket.id, "status": ticket.status})
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=400)
+#     try:
+#         if action == "APPROVE":
+#             approve(ticket, actor, remarks=remarks)
+#             return JsonResponse({"message": "Ticket approved", "ticket_id": ticket.id, "status": ticket.status})
+#         else:
+#             reject(ticket, actor, remarks=remarks)
+#             return JsonResponse({"message": "Ticket rejected", "ticket_id": ticket.id, "status": ticket.status})
+#     except Exception as e:
+#         return JsonResponse({"error": str(e)}, status=400)
 
 
-@csrf_exempt
-@require_http_methods(["POST"])
-def admin_complete(request, ticket_id):
-    """
-    URL: /admin-complete/<ticket_id>/
-    Body: { "remarks": "Item handed over" }
+# @csrf_exempt
+# @require_http_methods(["POST"])
+# def admin_complete(request, ticket_id):
+#     """
+#     URL: /admin-complete/<ticket_id>/
+#     Body: { "remarks": "Item handed over" }
 
-    This will call approve() using ADMIN actor.
-    In workflow engine:
-      - if ADMIN is last step => COMPLETED
-      - if not last step => moves to next (e.g. FINANCE)
-    """
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        data = {}
+#     This will call approve() using ADMIN actor.
+#     In workflow engine:
+#       - if ADMIN is last step => COMPLETED
+#       - if not last step => moves to next (e.g. FINANCE)
+#     """
+#     try:
+#         data = json.loads(request.body.decode("utf-8"))
+#     except (json.JSONDecodeError, UnicodeDecodeError):
+#         data = {}
 
-    remarks = data.get("remarks", "Completed by Admin")
+#     remarks = data.get("remarks", "Completed by Admin")
 
-    actor = User.objects.filter(role="ADMIN").first() or User.objects.filter(role_obj__name="ADMIN").first()
-    if not actor:
-        return JsonResponse({"error": "No ADMIN user found"}, status=400)
+#     actor = User.objects.filter(role="ADMIN").first() or User.objects.filter(role_obj__name="ADMIN").first()
+#     if not actor:
+#         return JsonResponse({"error": "No ADMIN user found"}, status=400)
 
-    try:
-        ticket = Ticket.objects.get(id=ticket_id)
-    except Ticket.DoesNotExist:
-        return JsonResponse({"error": "Ticket not found"}, status=404)
+#     try:
+#         ticket = Ticket.objects.get(id=ticket_id)
+#     except Ticket.DoesNotExist:
+#         return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    try:
-        approve(ticket, actor, remarks=remarks)
-        return JsonResponse({
-            "message": "Admin completed/approved step",
-            "ticket_id": ticket.id,
-            "status": ticket.status,
-            "current_step": ticket.current_step,
-            "current_role": ticket.current_role,
-        }, status=200)
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=400)
+#     try:
+#         approve(ticket, actor, remarks=remarks)
+#         return JsonResponse({
+#             "message": "Admin completed/approved step",
+#             "ticket_id": ticket.id,
+#             "status": ticket.status,
+#             "current_step": ticket.current_step,
+#             "current_role": ticket.current_role,
+#         }, status=200)
+#     except Exception as e:
+#         return JsonResponse({"error": str(e)}, status=400)
 
 
 

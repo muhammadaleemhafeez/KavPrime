@@ -332,3 +332,28 @@ def mark_employee_exited(request):
 
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
+
+
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
+from users.models import User
+
+@require_http_methods(["GET"])
+def list_team_pmo(request):
+    """
+    API to get all users with role TEAM_PMO
+    """
+    team_pmos = User.objects.filter(role__iexact="TEAM_PMO")  # case-insensitive match
+
+    result = [
+        {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "employment_status": user.employment_status,
+            "is_active": user.is_active
+        }
+        for user in team_pmos
+    ]
+
+    return JsonResponse({"team_pmo_users": result, "total": len(result)}, status=200)

@@ -30,11 +30,11 @@ urlpatterns = [
     path('action/<int:ticket_id>/', ticket_action, name="ticket_action"),
 
     # Manual escalation
-    path("escalate/<int:ticket_id>/", views.escalate_ticket, name="escalate_ticket"),
+    # path("escalate/<int:ticket_id>/", views.escalate_ticket, name="escalate_ticket"),
 
     # Email process actions
-    path("team-pmo-action/<int:ticket_id>/", views.team_pmo_action),
-    path("admin-complete/<int:ticket_id>/", views.admin_complete),
+    # path("team-pmo-action/<int:ticket_id>/", views.team_pmo_action),
+    # path("admin-complete/<int:ticket_id>/", views.admin_complete),
 
     # ✅ Workflow Management APIs (for Postman + Admin-like control)
     path("workflows/", views_workflow.list_workflows, name="list_workflows"),

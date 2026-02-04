@@ -4,6 +4,7 @@ from . import views_roles
 from . import views
 
 from .views_roles import create_workflow_with_roles
+from .views import list_team_pmo
 
 urlpatterns = [
     path("register/", register_user, name="register"),
@@ -13,6 +14,9 @@ urlpatterns = [
     path("getUsers/", get_all_users),
     path("mark-exited/", views.mark_employee_exited),
     path("upload-image/", views.upload_employee_image),
+
+    #list of team_pmo
+    path("team-pmo/list/", list_team_pmo, name="list_team_pmo"),
     
 
     # New API for image upload

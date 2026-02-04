@@ -6,7 +6,7 @@ from django.conf import settings
 
 from .models import AssignedTicket, Workflow, WorkflowStep, Ticket
 
-from Tickets.models import AssignedTicket
+# from Tickets.models import AssignedTicket
 
 User = get_user_model()
 
@@ -116,7 +116,6 @@ def start_workflow(ticket):
     if getattr(ticket.employee, "email", None):
         notify(ticket.employee.email, f"Ticket #{ticket.id} created", f"Your ticket is pending {role_name}.")
     return True
-
 
 def route_new_ticket(ticket: Ticket):
     # ✅ GLOBAL selection (ignore ticket.ticket_type)

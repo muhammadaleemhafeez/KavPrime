@@ -197,45 +197,45 @@ def active_workflow_step1_role(request):
     }, status=200)
 
 
+# ✅ NEW API IN SAME FILE: Create Workflow + Attach Roles
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_workflow_with_roles(request):
+    """
+    Create workflow + steps dynamically.
+
+    Body:
+    {
+      "ticket_type": "repair",
+      "version": 1,
+      "is_active": true,
+      "steps": [
+        {"role": "TEAM_PMO", "sla_hours": 4},
+        {"role": "SENIOR_PMO", "sla_hours": 8},
+        {"role": "ADMIN", "sla_hours": 24}
+      ]
+    }
+    """
     try:
         data = json.loads(request.body.decode("utf-8"))
     except Exception:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     ticket_type = (data.get("ticket_type") or "DEFAULT").strip()
-
-    # ✅ AUTO VERSION (if missing)
-    raw_version = data.get("version", None)
-    if raw_version in [None, "", 0]:
-        max_ver = Workflow.objects.filter(ticket_type=ticket_type).aggregate(m=Max("version"))["m"] or 0
-        version = max_ver + 1
-    else:
-        try:
-            version = int(raw_version)
-        except (TypeError, ValueError):
-            return JsonResponse({"error": "version must be an integer", "received": raw_version}, status=400)
-
-    is_active = bool(data.get("is_active", True))
-
-    workflow_name = (data.get("workflow_name") or "").strip()
-    description = (data.get("description") or "").strip()
-
+    version = int(data.get("version", 1))
+    is_active = bool(data.get("is_active", False))
     steps = data.get("steps") or []
-    if not isinstance(steps, list) or not steps:
+
+    if not isinstance(steps, list) or len(steps) == 0:
         return JsonResponse({"error": "steps must be a non-empty list"}, status=400)
 
-    # ✅ validate steps
+    # Validate steps quickly
     for i, s in enumerate(steps, start=1):
         if not isinstance(s, dict):
             return JsonResponse({"error": f"Step {i} must be object"}, status=400)
-
         role_name = (s.get("role") or "").strip()
         if not role_name:
             return JsonResponse({"error": f"Step {i}: role is required"}, status=400)
-
         if "sla_hours" in s:
             try:
                 int(s["sla_hours"])
@@ -246,30 +246,24 @@ def create_workflow_with_roles(request):
         wf, created = Workflow.objects.get_or_create(
             ticket_type=ticket_type,
             version=version,
-            defaults={
-                "is_active": is_active,
-                "workflow_name": workflow_name,
-                "description": description,
-            }
+            defaults={"is_active": is_active}
         )
 
-        # ✅ ALWAYS save name/description
-        wf.workflow_name = workflow_name
-        wf.description = description
-        wf.save(update_fields=["workflow_name", "description"])
-
-        # ✅ GLOBAL latest active
-        Workflow.objects.exclude(id=wf.id).update(is_active=False)
-        if not wf.is_active:
-            wf.is_active = True
+        # Update active flag if needed
+        if wf.is_active != is_active:
+            wf.is_active = is_active
             wf.save(update_fields=["is_active"])
 
-        # ✅ replace steps
+        # If activating this wf, deactivate others of same ticket_type
+        if wf.is_active:
+            Workflow.objects.filter(ticket_type=ticket_type).exclude(id=wf.id).update(is_active=False)
+
+        # Replace steps (simple + clean)
         WorkflowStep.objects.filter(workflow=wf).delete()
 
         out_steps = []
         for idx, s in enumerate(steps, start=1):
-            role_name = (s.get("role") or "").strip()
+            role_name = s["role"].strip()
             sla = int(s.get("sla_hours", 4))
 
             role_obj, _ = Role.objects.get_or_create(name=role_name)
@@ -280,7 +274,6 @@ def create_workflow_with_roles(request):
                 role=role_obj,
                 sla_hours=sla
             )
-
             out_steps.append({
                 "step_order": st.step_order,
                 "role": st.role.name,
@@ -292,7 +285,5 @@ def create_workflow_with_roles(request):
         "ticket_type": wf.ticket_type,
         "version": wf.version,
         "is_active": wf.is_active,
-        "workflow_name": wf.workflow_name or "",
-        "description": wf.description or "",
         "steps": out_steps
     }, status=201 if created else 200)
