@@ -8,6 +8,11 @@ from .models import Inventory, AssetDetails
 from django.views.decorators.http import require_POST
 from users.models import User
 from django.db.models import F
+from .models import PurchaseRequest, Inventory
+
+# finance get list of approved request 
+from django.views.decorators.http import require_GET
+
 
 
 # image processing
@@ -526,3 +531,236 @@ def return_all_employee_assets(request, employee_id):
         "employee_id": employee.id,
         "returned_asset_ids": returned_asset_ids,
     }, status=200)
+
+
+# auto genrated purchase request 
+
+def auto_create_purchase_request(inventory):
+    from .models import PurchaseRequest
+
+    # Already auto-created? Avoid spam
+    if PurchaseRequest.objects.filter(
+        inventory=inventory,
+        status="PENDING_FINANCE",
+        request_type="AUTO"
+    ).exists():
+        return
+
+    if inventory.available_quantity <= inventory.minimum_stock_level:
+        quantity_needed = (inventory.minimum_stock_level - inventory.available_quantity) + 5  # buffer
+
+        PurchaseRequest.objects.create(
+            inventory=inventory,
+            request_type="AUTO",
+            triggered_by="SYSTEM",
+            quantity_needed=quantity_needed,
+            status="PENDING_FINANCE",
+            remarks="Auto-triggered due to low stock"
+        )
+# manullay purchase request 
+
+@csrf_exempt
+def create_purchase_request(request):
+    """
+    Create a Purchase Request (Manual or Auto)
+    Can include invoice_attachment.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        # If using JSON body (no file)
+        if request.content_type == "application/json":
+            import json
+            data = json.loads(request.body)
+            inventory_id = data.get("inventory_id")
+            quantity_needed = data.get("quantity_needed")
+            remarks = data.get("remarks", "")
+            request_type = data.get("request_type", "MANUAL")
+            triggered_by = data.get("triggered_by", "ADMIN")
+            created_by_id = data.get("created_by")  # optional
+            invoice_attachment = None
+
+        else:
+            # If using form-data (can include file)
+            inventory_id = request.POST.get("inventory_id")
+            quantity_needed = request.POST.get("quantity_needed")
+            remarks = request.POST.get("remarks", "")
+            request_type = request.POST.get("request_type", "MANUAL")
+            triggered_by = request.POST.get("triggered_by", "ADMIN")
+            created_by_id = request.POST.get("created_by")
+            invoice_attachment = request.FILES.get("invoice_attachment")
+
+        if not inventory_id or not quantity_needed:
+            return JsonResponse({"error": "inventory_id and quantity_needed are required"}, status=400)
+
+        inventory = Inventory.objects.get(id=inventory_id)
+
+        created_by = User.objects.get(id=created_by_id) if created_by_id else None
+
+        pr = PurchaseRequest.objects.create(
+            inventory=inventory,
+            request_type=request_type,
+            triggered_by=triggered_by,
+            created_by=created_by,
+            quantity_needed=quantity_needed,
+            remarks=remarks,
+            invoice_attachment=invoice_attachment,
+            status="PENDING_FINANCE"
+        )
+
+        return JsonResponse({
+            "message": "Purchase request created",
+            "request_id": pr.id,
+            "status": pr.status,
+            "invoice_attachment": pr.invoice_attachment.url if pr.invoice_attachment else None
+        }, status=201)
+
+    except Inventory.DoesNotExist:
+        return JsonResponse({"error": "Inventory not found"}, status=404)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+# finance reaction on  inventory purchase request 
+@csrf_exempt
+def finance_approve_request(request, request_id):
+    try:
+        pr = PurchaseRequest.objects.get(id=request_id)
+
+        if pr.status != "PENDING_FINANCE":
+            return JsonResponse({"error": "Request is not pending finance approval"}, status=400)
+
+        pr.status = "APPROVED_FINANCE"
+        pr.save()
+
+        return JsonResponse({
+            "message": "Finance approved successfully",
+            "request_id": pr.id,
+            "next_step": "HR approval required"
+        })
+
+    except PurchaseRequest.DoesNotExist:
+        return JsonResponse({"error": "Purchase request not found"}, status=404)
+
+# when finance Approved then final Approval by HR
+@csrf_exempt
+def hr_approve_request(request, request_id):
+    try:
+        pr = PurchaseRequest.objects.get(id=request_id)
+
+        if pr.status != "APPROVED_FINANCE":
+            return JsonResponse({"error": "Finance approval pending"}, status=400)
+
+        pr.status = "APPROVED_HR"
+        pr.save()
+
+        return JsonResponse({
+            "message": "HR approved successfully",
+            "request_id": pr.id,
+            "next_step": "Order can be placed now"
+        })
+
+    except PurchaseRequest.DoesNotExist:
+        return JsonResponse({"error": "Purchase request not found"}, status=404)
+    
+
+# finance purchase  inventory add data 
+
+@csrf_exempt
+def finance_mark_as_purchased(request, request_id):
+    """
+    Finance final step: mark request as purchased, upload invoice, and record quantity purchased.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        pr = PurchaseRequest.objects.get(id=request_id)
+
+        if pr.status != "APPROVED_HR":
+            return JsonResponse({"error": "HR approval pending or invalid status"}, status=400)
+
+        # Multipart/form-data required for file upload
+        invoice_file = request.FILES.get("invoice_attachment")
+        purchased_quantity = request.POST.get("purchased_quantity")
+
+        if not purchased_quantity:
+            return JsonResponse({"error": "purchased_quantity is required"}, status=400)
+
+        purchased_quantity = int(purchased_quantity)
+        if purchased_quantity <= 0:
+            return JsonResponse({"error": "purchased_quantity must be greater than 0"}, status=400)
+
+        # Save invoice attachment if provided
+        if invoice_file:
+            pr.invoice_attachment = invoice_file
+
+        # Update quantity in inventory
+        inventory = pr.inventory
+        inventory.total_quantity += purchased_quantity
+        inventory.available_quantity += purchased_quantity
+        if inventory.available_quantity == 0:
+            inventory.status = "OUT_OF_STOCK"
+        elif inventory.available_quantity <= inventory.minimum_stock_level:
+            inventory.status = "LOW_STOCK"
+        else:
+            inventory.status = "AVAILABLE"
+        inventory.save()
+
+        # Update request
+        pr.status = "ORDER_PLACED"
+        pr.save()
+
+        return JsonResponse({
+            "message": f"Purchase completed for request {pr.id}",
+            "request_id": pr.id,
+            "inventory_id": inventory.id,
+            "inventory_total_quantity": inventory.total_quantity,
+            "inventory_available_quantity": inventory.available_quantity,
+            "status": pr.status,
+            "invoice_attachment": pr.invoice_attachment.url if pr.invoice_attachment else None
+        })
+
+    except PurchaseRequest.DoesNotExist:
+        return JsonResponse({"error": "Purchase request not found"}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_GET
+def list_purchase_requests(request):
+    """
+    List all purchase requests.
+    Optional query param: ?status=STATUS
+    """
+    status = request.GET.get("status")
+    
+    if status:
+        prs = PurchaseRequest.objects.filter(status=status)
+    else:
+        prs = PurchaseRequest.objects.all()
+    
+    prs_list = []
+    for pr in prs:
+        prs_list.append({
+            "id": pr.id,
+            "inventory_id": pr.inventory.id,
+            "inventory_name": pr.inventory.item_name,
+            "request_type": pr.request_type,
+            "triggered_by": pr.triggered_by,
+            "created_by": pr.created_by.name if pr.created_by else None,
+            "quantity_needed": pr.quantity_needed,
+            "status": pr.status,
+            "remarks": pr.remarks,
+            "invoice_attachment": pr.invoice_attachment.url if pr.invoice_attachment else None,
+            "created_at": pr.created_at.isoformat(),
+            "updated_at": pr.updated_at.isoformat(),
+        })
+    
+    return JsonResponse({
+        "total_requests": len(prs_list),
+        "purchase_requests": prs_list
+    }, safe=False)

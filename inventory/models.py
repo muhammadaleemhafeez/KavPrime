@@ -1,8 +1,10 @@
 from django.db import models
 from users.models import User
-
+from django.utils import timezone
 from django.db import models
 
+
+# describe functionality of inventory table
 class Inventory(models.Model):
 
     STATUS_CHOICES = (
@@ -46,7 +48,7 @@ class Inventory(models.Model):
     def __str__(self):
         return f"{self.available_quantity} - {self.item_name}"
 
-
+# describe the asset details
 class AssetDetails(models.Model):
 
     STATUS_CHOICES = (
@@ -90,3 +92,39 @@ class AssetDetails(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+# purchase request for inventory on low stock
+class PurchaseRequest(models.Model):
+
+    REQUEST_TYPES = (
+        ("AUTO", "Auto Generated"),
+        ("MANUAL", "Manual"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING_FINANCE", "Pending Finance Approval"),
+        ("APPROVED_FINANCE", "Finance Approved"),
+        ("APPROVED_HR", "HR Approved"),
+        ("ORDER_PLACED", "Order Placed"),
+        ("COMPLETED", "Completed"),
+        ("REJECTED", "Rejected"),
+    )
+
+    inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE)
+    request_type = models.CharField(max_length=10, choices=REQUEST_TYPES)
+    triggered_by = models.CharField(max_length=20)  # SYSTEM / ADMIN
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+
+    quantity_needed = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PENDING_FINANCE")
+    remarks = models.TextField(blank=True, null=True)
+
+    # ✅ NEW FIELD — Invoice File Upload
+    invoice_attachment = models.FileField(upload_to="purchase_invoices/", null=True, blank=True)
+
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PR-{self.id} | {self.inventory.item_name}"
+

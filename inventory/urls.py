@@ -11,6 +11,8 @@ from .views import (
     get_inventory_assets,
     get_asset_detail,
     return_all_employee_assets,
+    create_purchase_request,
+    list_purchase_requests
 )
 
 urlpatterns = [
@@ -31,5 +33,27 @@ urlpatterns = [
     # return all asset when employee leaving company 
 
     path('employee-return-assets/<int:employee_id>/', return_all_employee_assets),
+
+    # request for inventory to finance
+
+    path("create-purchase-request/", views.create_purchase_request),
+
+    # finace approval URL
+    path("purchase-request/<int:request_id>/finance-approve/", views.finance_approve_request),
+
+    # HR approval URL
+    path("purchase-request/<int:request_id>/hr-approve/", views.hr_approve_request),
+
+
+    #create purchase request 
+    # path("create-purchase-request/", create_purchase_request, name="create_purchase_request"),
+
+    # finance purchase add record 
+    path("purchase-request/<int:request_id>/finance-purchase/", views.finance_mark_as_purchased, name="finance_purchase_request"),
+
+    # list of purchse 
+
+    path("purchase-requests/", list_purchase_requests, name="list_purchase_requests"),
+
 
 ]
