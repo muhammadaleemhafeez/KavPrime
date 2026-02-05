@@ -10,6 +10,7 @@ from .views import (
     get_employee_assets,
     get_inventory_assets,
     get_asset_detail,
+    return_all_employee_assets,
 )
 
 urlpatterns = [
@@ -25,4 +26,10 @@ urlpatterns = [
     path('assets/<int:asset_id>/', get_asset_detail, name='asset_detail'),
 
     path("return-asset/", views.return_asset),
+
+
+    # return all asset when employee leaving company 
+
+    path('employee-return-assets/<int:employee_id>/', return_all_employee_assets),
+
 ]

@@ -7,6 +7,7 @@ from django.db import transaction
 from .models import Inventory, AssetDetails
 from django.views.decorators.http import require_POST
 from users.models import User
+from django.db.models import F
 
 
 # image processing
@@ -469,3 +470,59 @@ def return_asset(request):
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
+# return all asset when employee leaving company 
+
+
+@csrf_exempt
+@transaction.atomic
+def return_all_employee_assets(request, employee_id):
+    """
+    Return all issued assets of an employee (e.g., on resignation)
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        employee = User.objects.get(id=employee_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "Employee not found"}, status=404)
+
+    # Fetch all assets that are currently ISSUED
+    assets = AssetDetails.objects.select_for_update().filter(user=employee, status="ISSUED")
+
+    if not assets.exists():
+        return JsonResponse({"message": "No assets to return for this employee"}, status=200)
+
+    returned_asset_ids = []
+
+    for asset in assets:
+        inventory = Inventory.objects.select_for_update().get(id=asset.inventory_id)
+
+        # Update asset
+        asset.status = "RETURNED"
+        asset.return_date = timezone.now()
+        asset.save(update_fields=["status", "return_date", "updated_at"])
+
+        # Update inventory quantities
+        Inventory.objects.filter(id=inventory.id).update(
+            available_quantity=F("available_quantity") + asset.quantity_issued,
+            issued_quantity=F("issued_quantity") - asset.quantity_issued,
+        )
+        inventory.refresh_from_db()
+
+        # Update inventory status
+        if inventory.available_quantity == 0:
+            inventory.status = "OUT_OF_STOCK"
+        elif inventory.available_quantity <= inventory.minimum_stock_level:
+            inventory.status = "LOW_STOCK"
+        else:
+            inventory.status = "AVAILABLE"
+        inventory.save(update_fields=["status", "updated_at"])
+
+        returned_asset_ids.append(asset.id)
+
+    return JsonResponse({
+        "message": f"All assets returned for employee {employee.name}",
+        "employee_id": employee.id,
+        "returned_asset_ids": returned_asset_ids,
+    }, status=200)
