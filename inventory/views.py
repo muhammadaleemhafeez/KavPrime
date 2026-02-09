@@ -535,28 +535,28 @@ def return_all_employee_assets(request, employee_id):
 
 # auto genrated purchase request 
 
-def auto_create_purchase_request(inventory):
-    from .models import PurchaseRequest
+# def auto_create_purchase_request(inventory):
+#     from .models import PurchaseRequest
 
-    # Already auto-created? Avoid spam
-    if PurchaseRequest.objects.filter(
-        inventory=inventory,
-        status="PENDING_FINANCE",
-        request_type="AUTO"
-    ).exists():
-        return
+#     # Already auto-created? Avoid spam
+#     if PurchaseRequest.objects.filter(
+#         inventory=inventory,
+#         status="PENDING_FINANCE",
+#         request_type="AUTO"
+#     ).exists():
+#         return
 
-    if inventory.available_quantity <= inventory.minimum_stock_level:
-        quantity_needed = (inventory.minimum_stock_level - inventory.available_quantity) + 5  # buffer
+#     if inventory.available_quantity <= inventory.minimum_stock_level:
+#         quantity_needed = (inventory.minimum_stock_level - inventory.available_quantity) + 5  # buffer
 
-        PurchaseRequest.objects.create(
-            inventory=inventory,
-            request_type="AUTO",
-            triggered_by="SYSTEM",
-            quantity_needed=quantity_needed,
-            status="PENDING_FINANCE",
-            remarks="Auto-triggered due to low stock"
-        )
+#         PurchaseRequest.objects.create(
+#             inventory=inventory,
+#             request_type="AUTO",
+#             triggered_by="SYSTEM",
+#             quantity_needed=quantity_needed,
+#             status="PENDING_FINANCE",
+#             remarks="Auto-triggered due to low stock"
+#         )
 # manullay purchase request 
 
 @csrf_exempt

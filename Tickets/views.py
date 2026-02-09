@@ -38,21 +38,15 @@ def create_ticket(request):
 
     # ✅ ticket type mapping (frontend label -> backend key)
     ticket_type_map = {
-        # repair
-        "repair": "repair",
-        "Repair an Item": "repair",
-        "Repair an item": "repair",
-
-        # new item
-        "new_item": "new_item",
-        "Request New Item": "new_item",
-        "Request a new item": "new_item",
-
-        # general
-        "general": "general",
-        "General Issue": "general",
-        "general Issue": "general",
-        "Report a general issue": "general",
+        # type 1
+        "Repair an Item": "Repair an Item",
+      
+        #type 2
+        "Request New Item": "Request New Item",
+       
+        #type 3
+        "General Issue": "General Issue",
+       
     }
 
     normalized_ticket_type = ticket_type_map.get(ticket_type)
