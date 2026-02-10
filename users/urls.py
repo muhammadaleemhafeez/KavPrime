@@ -3,8 +3,9 @@ from .views import register_user, login_user, update_user, delete_user, get_all_
 from . import views_roles
 from . import views
 
-from .views_roles import create_workflow_with_roles
+# from .views_roles import create_workflow_with_roles
 from .views import list_team_pmo
+from Tickets.views_workflow import create_workflow_with_roles
 
 urlpatterns = [
     path("register/", register_user, name="register"),

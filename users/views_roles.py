@@ -69,110 +69,110 @@ def set_role_active(request, role_id):
 
 
 # ✅ NEW API IN SAME FILE: Create Workflow + Attach Roles + Optional Bypass Roles
-@csrf_exempt
-@require_http_methods(["POST"])
-def create_workflow_with_roles(request):
-    """
-    Create workflow + steps dynamically with optional bypass for certain roles.
+# @csrf_exempt
+# @require_http_methods(["POST"])
+# def create_workflow_with_roles(request):
+#     """
+#     Create workflow + steps dynamically with optional bypass for certain roles.
 
-    Body example:
-    {
-      "ticket_type": "repair",
-      "version": 1,
-      "is_active": true,
-      "steps": [
-        {"role": "TEAM_PMO", "sla_hours": 4},
-        {"role": "SENIOR_PMO", "sla_hours": 8},
-        {"role": "ADMIN", "sla_hours": 24}
-      ],
-      "bypass_roles": ["SENIOR_PMO", "HR"]   # optional: roles that bypass workflow
-    }
-    """
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except Exception:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
+#     Body example:
+#     {
+#       "ticket_type": "repair",
+#       "version": 1,
+#       "is_active": true,
+#       "steps": [
+#         {"role": "TEAM_PMO", "sla_hours": 4},
+#         {"role": "SENIOR_PMO", "sla_hours": 8},
+#         {"role": "ADMIN", "sla_hours": 24}
+#       ],
+#       "bypass_roles": ["SENIOR_PMO", "HR"]   # optional: roles that bypass workflow
+#     }
+#     """
+#     try:
+#         data = json.loads(request.body.decode("utf-8"))
+#     except Exception:
+#         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    ticket_type = (data.get("ticket_type") or "DEFAULT").strip()
-    version = int(data.get("version", 1))
-    is_active = bool(data.get("is_active", False))
-    steps = data.get("steps") or []
-    bypass_roles = data.get("bypass_roles") or []  # NEW: roles that bypass this workflow
+#     ticket_type = (data.get("ticket_type") or "DEFAULT").strip()
+#     version = int(data.get("version", 1))
+#     is_active = bool(data.get("is_active", False))
+#     steps = data.get("steps") or []
+#     bypass_roles = data.get("bypass_roles") or []  # NEW: roles that bypass this workflow
 
-    if not isinstance(steps, list) or len(steps) == 0:
-        return JsonResponse({"error": "steps must be a non-empty list"}, status=400)
+#     if not isinstance(steps, list) or len(steps) == 0:
+#         return JsonResponse({"error": "steps must be a non-empty list"}, status=400)
 
-    # Validate steps
-    for i, s in enumerate(steps, start=1):
-        if not isinstance(s, dict):
-            return JsonResponse({"error": f"Step {i} must be an object"}, status=400)
-        role_name = (s.get("role") or "").strip()
-        if not role_name:
-            return JsonResponse({"error": f"Step {i}: role is required"}, status=400)
-        if "sla_hours" in s:
-            try:
-                int(s["sla_hours"])
-            except Exception:
-                return JsonResponse({"error": f"Step {i}: sla_hours must be int"}, status=400)
+#     # Validate steps
+#     for i, s in enumerate(steps, start=1):
+#         if not isinstance(s, dict):
+#             return JsonResponse({"error": f"Step {i} must be an object"}, status=400)
+#         role_name = (s.get("role") or "").strip()
+#         if not role_name:
+#             return JsonResponse({"error": f"Step {i}: role is required"}, status=400)
+#         if "sla_hours" in s:
+#             try:
+#                 int(s["sla_hours"])
+#             except Exception:
+#                 return JsonResponse({"error": f"Step {i}: sla_hours must be int"}, status=400)
 
-    # Validate bypass_roles
-    if bypass_roles:
-        if not isinstance(bypass_roles, list):
-            return JsonResponse({"error": "bypass_roles must be a list"}, status=400)
-        bypass_roles = [r.strip().upper() for r in bypass_roles if r.strip()]
+#     # Validate bypass_roles
+#     if bypass_roles:
+#         if not isinstance(bypass_roles, list):
+#             return JsonResponse({"error": "bypass_roles must be a list"}, status=400)
+#         bypass_roles = [r.strip().upper() for r in bypass_roles if r.strip()]
 
-    with transaction.atomic():
-        # Create or get workflow
-        wf, created = Workflow.objects.get_or_create(
-            ticket_type=ticket_type,
-            version=version,
-            defaults={"is_active": is_active}
-        )
+#     with transaction.atomic():
+#         # Create or get workflow
+#         wf, created = Workflow.objects.get_or_create(
+#             ticket_type=ticket_type,
+#             version=version,
+#             defaults={"is_active": is_active}
+#         )
 
-        # Update active flag if needed
-        if wf.is_active != is_active:
-            wf.is_active = is_active
-            wf.save(update_fields=["is_active"])
+#         # Update active flag if needed
+#         if wf.is_active != is_active:
+#             wf.is_active = is_active
+#             wf.save(update_fields=["is_active"])
 
-        # If activating this wf, deactivate others of same ticket_type
-        if wf.is_active:
-            Workflow.objects.filter(ticket_type=ticket_type).exclude(id=wf.id).update(is_active=False)
+#         # If activating this wf, deactivate others of same ticket_type
+#         if wf.is_active:
+#             Workflow.objects.filter(ticket_type=ticket_type).exclude(id=wf.id).update(is_active=False)
 
-        # Store bypass_roles (you need a JSON/text field in Workflow model)
-        if hasattr(wf, "bypass_roles"):
-            import json as pyjson
-            wf.bypass_roles = pyjson.dumps(bypass_roles)
-            wf.save(update_fields=["bypass_roles"])
+#         # Store bypass_roles (you need a JSON/text field in Workflow model)
+#         if hasattr(wf, "bypass_roles"):
+#             import json as pyjson
+#             wf.bypass_roles = pyjson.dumps(bypass_roles)
+#             wf.save(update_fields=["bypass_roles"])
 
-        # Replace steps
-        WorkflowStep.objects.filter(workflow=wf).delete()
-        out_steps = []
-        for idx, s in enumerate(steps, start=1):
-            role_name = s["role"].strip()
-            sla = int(s.get("sla_hours", 4))
+#         # Replace steps
+#         WorkflowStep.objects.filter(workflow=wf).delete()
+#         out_steps = []
+#         for idx, s in enumerate(steps, start=1):
+#             role_name = s["role"].strip()
+#             sla = int(s.get("sla_hours", 4))
 
-            role_obj, _ = Role.objects.get_or_create(name=role_name)
+#             role_obj, _ = Role.objects.get_or_create(name=role_name)
 
-            st = WorkflowStep.objects.create(
-                workflow=wf,
-                step_order=idx,
-                role=role_obj,
-                sla_hours=sla
-            )
-            out_steps.append({
-                "step_order": st.step_order,
-                "role": st.role.name,
-                "sla_hours": st.sla_hours
-            })
+#             st = WorkflowStep.objects.create(
+#                 workflow=wf,
+#                 step_order=idx,
+#                 role=role_obj,
+#                 sla_hours=sla
+#             )
+#             out_steps.append({
+#                 "step_order": st.step_order,
+#                 "role": st.role.name,
+#                 "sla_hours": st.sla_hours
+#             })
 
-    return JsonResponse({
-        "workflow_id": wf.id,
-        "ticket_type": wf.ticket_type,
-        "version": wf.version,
-        "is_active": wf.is_active,
-        "steps": out_steps,
-        "bypass_roles": bypass_roles
-    }, status=201 if created else 200)
+#     return JsonResponse({
+#         "workflow_id": wf.id,
+#         "ticket_type": wf.ticket_type,
+#         "version": wf.version,
+#         "is_active": wf.is_active,
+#         "steps": out_steps,
+#         "bypass_roles": bypass_roles
+#     }, status=201 if created else 200)
 
 
 # show list of all workflow

@@ -177,88 +177,115 @@ def route_new_ticket(ticket: Ticket):
         
 def approve(ticket, actor, remarks=""):
     """
-    Approve using workflow steps if workflow is attached.
-    If no workflow -> fallback to old hardcoded.
+    Approve a ticket according to its workflow dynamically.
+    Works for any role that created the ticket or is in workflow steps.
     """
-    actor_role = getattr(actor, "role_name", None) or getattr(actor, "role", "")
+    actor_role = getattr(actor, "role", None) or getattr(actor, "role_name", "")
 
-    # ✅ WORKFLOW MODE
-    if ticket.workflow and ticket.current_step > 0:
+    # -----------------------
+    # WORKFLOW MODE
+    # -----------------------
+    if ticket.workflow:
+        # Record the approval by the actor
         add_history(ticket, actor, actor_role, "APPROVED", remarks)
 
-        next_step_order = ticket.current_step + 1
-        next_step = get_step(ticket.workflow, next_step_order)
+        # Fetch all workflow steps ordered by step_order
+        workflow_steps = ticket.workflow.workflowstep_set.order_by("step_order").all()
 
-        # If no next step => completed
+        # Determine the next step based on current_step
+        next_step = None
+        for step in workflow_steps:
+            if step.step_order > ticket.current_step:
+                next_step = step
+                break
+
+        # If no next step → ticket completed
         if not next_step:
             ticket.status = "COMPLETED"
             ticket.current_role = None
             ticket.step_deadline = None
-            ticket.save(update_fields=["status", "current_role", "step_deadline"])
+            ticket.assigned_to = None
+            ticket.save(update_fields=["status", "current_role", "step_deadline", "assigned_to"])
 
-            # Final emails
-            recipients = []
-            recipients += get_emails_by_role("TEAM_PMO")
-            recipients += get_emails_by_role("HR")
+            # Notify final recipients (HR + TEAM_PMO + Employee)
+            recipients = get_emails_by_role("HR") + get_emails_by_role("TEAM_PMO")
             if getattr(ticket.employee, "email", None):
                 recipients.append(ticket.employee.email)
 
-            notify(list(set(recipients)), f"Ticket #{ticket.id} completed", "Ticket process completed.")
+            notify(
+                list(set(recipients)),
+                f"Ticket #{ticket.id} completed",
+                "Ticket workflow has been fully completed."
+            )
             return
 
-        role_name = next_step.role.name
-        assignee = get_first_by_role(role_name)
+        # Assign ticket to next step dynamically
+        # Use target_role if defined, otherwise the main step role
+        next_role_name = next_step.target_role.name if next_step.target_role else next_step.role.name
+        assignee = get_first_by_role(next_role_name)
         if not assignee:
-            raise ValueError(f"No user found for role: {role_name}")
+            raise ValueError(f"No user found for role: {next_role_name}")
 
-        ticket.current_step = next_step_order
-        ticket.current_role = role_name
+        # Update ticket for next step
+        ticket.current_step = next_step.step_order
+        ticket.current_role = next_role_name
+        ticket.assigned_to = assignee
         ticket.step_deadline = timezone.now() + timedelta(hours=next_step.sla_hours or SLA_HOURS_FALLBACK)
-        ticket.status = f"PENDING_{role_name}"
-        ticket.save(update_fields=["current_step", "current_role", "step_deadline", "status"])
+        ticket.status = f"PENDING_{next_role_name}"
+        ticket.save(update_fields=["current_step", "current_role", "assigned_to", "step_deadline", "status"])
 
-        add_history(ticket, assignee, role_name, "ASSIGNED", "Moved to next workflow step")
-        notify(assignee.email, f"Ticket #{ticket.id} needs action", f"Ticket moved to you.\nRole: {role_name}")
+        # Record assignment and notify
+        add_history(ticket, assignee, next_role_name, "ASSIGNED", "Moved to next workflow step")
+        notify(
+            assignee.email,
+            f"Ticket #{ticket.id} requires your action",
+            f"Ticket moved to you for role: {next_role_name}"
+        )
         return
 
-    # ✅ FALLBACK MODE (tickets without workflow)
+    # -----------------------
+    # FALLBACK MODE (no workflow)
+    # -----------------------
+    # If there is no workflow, fallback to old logic
+    add_history(ticket, actor, actor_role, "APPROVED", remarks)
+
+    # If actor is TEAM_PMO → assign to ADMIN
     if actor_role == "TEAM_PMO":
         admin = get_first_by_role("ADMIN")
         if not admin:
             raise ValueError("No ADMIN user found")
 
-        add_history(ticket, actor, "TEAM_PMO", "APPROVED", remarks)
-        add_history(ticket, admin, "ADMIN", "ASSIGNED", "Approved by Team PMO → assigned to Admin")
-
         ticket.status = "PENDING_ADMIN"
-        ticket.team_pmo_deadline = None
-        ticket.save(update_fields=["status", "team_pmo_deadline"])
+        ticket.current_role = "ADMIN"
+        ticket.assigned_to = admin
+        ticket.save(update_fields=["status", "current_role", "assigned_to"])
 
+        add_history(ticket, admin, "ADMIN", "ASSIGNED", "Approved by Team PMO → assigned to Admin")
         notify(admin.email, f"Ticket #{ticket.id} needs action", "Ticket approved by Team PMO.")
-        notify(ticket.employee.email, f"Ticket #{ticket.id} approved by Team PMO", "Ticket moved to Admin.")
+        if getattr(ticket.employee, "email", None):
+            notify(ticket.employee.email, f"Ticket #{ticket.id} approved by Team PMO", "Ticket moved to Admin.")
         return
 
+    # If actor is ADMIN → complete ticket
     if actor_role == "ADMIN":
-        # ✅ Admin completes old-flow ticket
-        add_history(ticket, actor, "ADMIN", "COMPLETED", remarks)
         ticket.status = "COMPLETED"
-        ticket.save(update_fields=["status"])
+        ticket.current_role = None
+        ticket.assigned_to = None
+        ticket.save(update_fields=["status", "current_role", "assigned_to"])
 
-        # ✅ Final email: TEAM_PMO + HR + employee
-        recipients = []
-        recipients += get_emails_by_role("TEAM_PMO")
-        recipients += get_emails_by_role("HR")
+        recipients = get_emails_by_role("TEAM_PMO") + get_emails_by_role("HR")
         if getattr(ticket.employee, "email", None):
             recipients.append(ticket.employee.email)
 
         notify(
             list(set(recipients)),
-            f"Ticket #{ticket.id} completed and handed over",
-            "Admin processed and handed over the item/service."
+            f"Ticket #{ticket.id} completed by Admin",
+            "Admin has completed the ticket process."
         )
         return
 
-    raise ValueError("This role cannot approve tickets.")
+    # If role not allowed
+    raise ValueError(f"Role '{actor_role}' cannot approve tickets.")
 
 
 def reject(ticket, actor, remarks=""):

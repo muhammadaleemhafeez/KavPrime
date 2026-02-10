@@ -15,14 +15,14 @@ from Tickets.models import Ticket, Workflow
 from .services import route_new_ticket, approve, reject, add_history
 
 
-
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_ticket(request):
     """
     Employee creates a ticket:
     - Creates Ticket
-    - Routes it using the workflow engine
+    - Routes it using the workflow engine based on employee role and workflow steps
+    - Sets status dynamically according to the current_role from workflow
     """
 
     try:
@@ -30,71 +30,86 @@ def create_ticket(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
+    # Required fields
     employee_id = data.get("employee_id")
-    ticket_type = (data.get("ticket_type") or "").strip()
+    ticket_type_input = (data.get("ticket_type") or "").strip()
     title = data.get("title")
     description = data.get("description")
-    assigned_to_id = data.get("assigned_to")
+    role_override = data.get("role")  # Optional override
 
-    # ✅ ticket type mapping (frontend label -> backend key)
+    if not employee_id or not ticket_type_input or not title or not description:
+        return JsonResponse({"error": "employee_id, ticket_type, title, description are required"}, status=400)
+
+    # Map frontend label -> backend key
     ticket_type_map = {
-        # type 1
         "Repair an Item": "Repair an Item",
-      
-        #type 2
         "Request New Item": "Request New Item",
-       
-        #type 3
         "General Issue": "General Issue",
-       
     }
 
-    normalized_ticket_type = ticket_type_map.get(ticket_type)
-
-    if not normalized_ticket_type:
+    ticket_type = ticket_type_map.get(ticket_type_input)
+    if not ticket_type:
         return JsonResponse({
             "error": "Invalid ticket_type",
-            "allowed_ticket_types": [
-                "Request New Item",
-                "Repair an Item",
-                "General Issue"
-            ]
+            "allowed_ticket_types": list(ticket_type_map.keys())
         }, status=400)
 
-    ticket_type = normalized_ticket_type  # ✅ overwrite
-
-    # Ensure required fields
-    if not employee_id or not title or not description:
-        return JsonResponse(
-            {"error": "employee_id, title, description are required"},
-            status=400
-        )
-
+    # Get employee object
     try:
         employee = User.objects.get(id=employee_id)
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    assigned_to = None
-    if assigned_to_id:
-        try:
-            assigned_to = User.objects.get(id=assigned_to_id)
-        except User.DoesNotExist:
-            return JsonResponse({"error": "Assigned user not found"}, status=404)
+    # Determine employee role (or use override from request body)
+    employee_role_name = role_override or employee.role
+    if not employee_role_name:
+        return JsonResponse({"error": "Employee has no role assigned"}, status=400)
 
+    # Create ticket without status yet
     ticket = Ticket.objects.create(
         employee=employee,
         ticket_type=ticket_type,
         title=title,
         description=description,
-        assigned_to=assigned_to,
-        status="PENDING_TEAM_PMO",
-        created_by_role=employee.role_name if hasattr(employee, "role_name") else employee.role,
+        created_by_role=employee_role_name
     )
 
     try:
-        route_new_ticket(ticket)
-        ticket.refresh_from_db()  # ✅ ensure workflow_id/current_role is updated
+        # -------------------------------
+        # ROUTE TICKET BASED ON ACTIVE WORKFLOW
+        # -------------------------------
+        workflow = Workflow.objects.filter(ticket_type=ticket_type, is_active=True).order_by("-id").first()
+        if not workflow:
+            raise Exception("No active workflow found for this ticket type")
+
+        ticket.workflow = workflow
+
+        # 1️⃣ Find first workflow step for this employee's role
+        first_step = WorkflowStep.objects.filter(
+            workflow=workflow,
+            role__name=employee_role_name
+        ).order_by("step_order").first()
+
+        if not first_step:
+            # fallback: first step in workflow
+            first_step = WorkflowStep.objects.filter(workflow=workflow).order_by("step_order").first()
+            if not first_step:
+                raise Exception("Workflow has no steps defined")
+
+        # 2️⃣ Assign ticket workflow fields
+        ticket.current_step = first_step.step_order
+        ticket.current_role = first_step.target_role.name if first_step.target_role else employee_role_name
+
+        # 3️⃣ Dynamically set status based on current_role
+        ticket.status = f"PENDING_{ticket.current_role}" if ticket.current_role else "PENDING"
+
+        # 4️⃣ Assign ticket to a user with the target_role (if any)
+        if first_step.target_role:
+            assigned_user = User.objects.filter(role=first_step.target_role.name).first()
+            ticket.assigned_to = assigned_user
+
+        ticket.save()
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
@@ -102,13 +117,12 @@ def create_ticket(request):
         "message": "Ticket created successfully",
         "ticket_id": ticket.id,
         "assigned_to": ticket.assigned_to.id if ticket.assigned_to else None,
-        "ticket_type": ticket.ticket_type,      # ✅ backend key saved
+        "ticket_type": ticket.ticket_type,
         "status": ticket.status,
         "current_role": ticket.current_role,
         "current_step": ticket.current_step,
         "workflow_id": ticket.workflow_id,
     }, status=201)
-
 
 
 @require_http_methods(["GET"])
@@ -458,6 +472,7 @@ def ticket_history(request, employee_id=None, ticket_id=None):
 def ticket_action(request, ticket_id):
     """
     Generic ticket action API for dynamic workflow approval/rejection
+    Handles multi-role workflow and dynamically updates ticket status
     """
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -470,29 +485,80 @@ def ticket_action(request, ticket_id):
     if action not in ["APPROVE", "REJECT"]:
         return JsonResponse({"error": "action must be APPROVE or REJECT"}, status=400)
 
-    # You can use a hardcoded actor for testing or fetch based on role
-    actor = User.objects.first()  # or filter by role depending on workflow
-    if not actor:
-        return JsonResponse({"error": "No user found to act on ticket"}, status=400)
-
     try:
         ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
         return JsonResponse({"error": "Ticket not found"}, status=404)
 
+    workflow = ticket.workflow
+    if not workflow:
+        return JsonResponse({"error": "Ticket has no workflow assigned"}, status=400)
+
+    # Determine actor (current role user)
+    actor_role_name = ticket.current_role
+    actor = User.objects.filter(role=actor_role_name).first()
+    if not actor:
+        return JsonResponse({"error": f"No user found for role {actor_role_name}"}, status=400)
+
     try:
-        if action == "APPROVE":
-            approve(ticket, actor, remarks)
+        # -------------------------------
+        # Handle APPROVE / REJECT actions
+        # -------------------------------
+        if action == "REJECT":
+            # Mark ticket as rejected
+            ticket.status = "REJECTED"
+            ticket.save()
         else:
-            reject(ticket, actor, remarks)
+            # APPROVE: move to next workflow step
+            current_step_order = ticket.current_step
+
+            # Find next step in workflow after current step
+            next_step = WorkflowStep.objects.filter(
+                workflow=workflow,
+                step_order__gt=current_step_order
+            ).order_by("step_order").first()
+
+            if next_step:
+                # Move ticket to next step
+                ticket.current_step = next_step.step_order
+                ticket.current_role = next_step.target_role.name if next_step.target_role else next_step.role.name
+
+                # Dynamically set status based on current_role
+                ticket.status = f"PENDING_{ticket.current_role}" if ticket.current_role else "PENDING"
+
+                # Assign ticket to a user in the next role
+                assigned_user = User.objects.filter(role=ticket.current_role).first()
+                ticket.assigned_to = assigned_user
+            else:
+                # No next step: mark ticket as completed
+                ticket.status = "COMPLETED"
+                ticket.current_role = None
+                ticket.current_step = ticket.current_step  # remains last step
+                ticket.assigned_to = None
+
+            ticket.save()
+
+        # Optionally: log action in AssignedTicket table
+        AssignedTicket.objects.create(
+            ticket=ticket,
+            assigned_to=actor,
+            role=actor_role_name,
+            status=action,
+            remarks=remarks
+        )
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
     return JsonResponse({
         "message": f"Ticket {action}D successfully",
         "ticket_id": ticket.id,
-        "status": ticket.status
+        "status": ticket.status,
+        "current_role": ticket.current_role,
+        "current_step": ticket.current_step,
+        "assigned_to": ticket.assigned_to.id if ticket.assigned_to else None
     }, status=200)
+
 
 @csrf_exempt
 @require_http_methods(["DELETE"])

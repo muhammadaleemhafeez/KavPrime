@@ -92,7 +92,6 @@ def register_user(request):
         return JsonResponse({"error": "Database error", "detail": str(e)}, status=400)
 
 # add new user
-
 @csrf_exempt
 def login_user(request):
     if request.method != "POST":
@@ -130,7 +129,6 @@ def login_user(request):
             "HR": "/hr/dashboard",
         }
 
-        # Normalize role
         role_key = user.role.upper()
 
         # Fetch latest active workflow
@@ -138,34 +136,45 @@ def login_user(request):
 
         workflow_data = None
         if workflow:
+            # Fetch all steps in order
             steps = WorkflowStep.objects.filter(workflow=workflow).order_by("step_order")
+
+            # Only include steps where logged-in user is the main role
+            relevant_steps = []
+            for s in steps:
+                main_role_name = s.role.name.upper() if s.role else ""
+                if main_role_name == role_key:
+                    relevant_steps.append({
+                        "step_order": s.step_order,
+                        "role": s.role.name if s.role else None,
+                        "target_role": s.target_role.name if s.target_role else None,
+                        "sla_hours": s.sla_hours
+                    })
+
+            # Prepare workflow data
             workflow_data = {
                 "workflow_id": workflow.id,
                 "ticket_type": workflow.ticket_type,
                 "version": workflow.version,
                 "workflow_name": workflow.workflow_name,
                 "description": workflow.description,
-                "steps": [
-                    {
-                        "step_order": s.step_order,
-                        "role": s.role.name,
-                        "sla_hours": s.sla_hours
-                    }
-                    for s in steps
-                ]
+                "steps": relevant_steps
             }
 
+        # Final response
         return JsonResponse({
             "message": "Login successful",
             "user_id": user.id,
             "role": user.role,
             "employment_status": user.employment_status,
             "redirect_url": dashboard_map.get(role_key),
-            "workflow": workflow_data  # 👈 Added here
+            "workflow": workflow_data
         }, status=200)
 
     except User.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
+    
+    
 
 #update the user
 
