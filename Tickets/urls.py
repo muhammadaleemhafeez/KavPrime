@@ -27,7 +27,7 @@ urlpatterns = [
     path('ticket-history/ticket/<int:ticket_id>/', views.ticket_history, name='ticket-history-ticket'),
 
     # ticket approval or rejection dynamically
-    path('action/<int:ticket_id>/', ticket_action, name="ticket_action"),
+    # path('action/<int:ticket_id>/', ticket_action, name="ticket_action"),
 
     # Manual escalation
     # path("escalate/<int:ticket_id>/", views.escalate_ticket, name="escalate_ticket"),
@@ -45,4 +45,8 @@ urlpatterns = [
      # ✅ Workflow fecching first role base on is_active is true
     path("workflows/active/step1-role/", views_workflow.active_workflow_step1_role, name="active_step1_role"),
 
+
+    path('dashboard/<int:user_id>/', views.dashboard_tickets, name='dashboard_tickets'),
+
+    path('action/<int:ticket_id>/', views.ticket_action, name='ticket_action'),
 ]

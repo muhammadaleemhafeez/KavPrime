@@ -26,22 +26,42 @@ class Workflow(models.Model):
     def __str__(self):
         return f"{self.ticket_type} v{self.version} {'(ACTIVE)' if self.is_active else ''}"
 
+# class WorkflowStep(models.Model):
+#     workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
+#     step_order = models.PositiveIntegerField()
+#     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="main_steps")
+#     target_role = models.ForeignKey(
+#         Role,
+#         on_delete=models.PROTECT,
+#         related_name="target_steps",
+#         null=True,  # temporarily allow NULL
+#         blank=True
+#     )
+#     sla_hours = models.PositiveIntegerField(default=4)
+
+#     class Meta:
+#         unique_together = ("workflow", "step_order")
+#         ordering = ["step_order"]
+
+#     def __str__(self):
+#         return f"{self.workflow} | Step {self.step_order}: {self.role.name} -> {self.target_role.name if self.target_role else 'N/A'} (SLA {self.sla_hours}h)"
+
 class WorkflowStep(models.Model):
     workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
-    step_order = models.PositiveIntegerField()
+    step_order = models.PositiveIntegerField()  # step number per role
     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="main_steps")
     target_role = models.ForeignKey(
         Role,
         on_delete=models.PROTECT,
         related_name="target_steps",
-        null=True,  # temporarily allow NULL
+        null=True,
         blank=True
     )
     sla_hours = models.PositiveIntegerField(default=4)
 
     class Meta:
-        unique_together = ("workflow", "step_order")
-        ordering = ["step_order"]
+        unique_together = ("workflow", "role", "step_order")  # ✅ per-role uniqueness
+        ordering = ["role", "step_order"]
 
     def __str__(self):
         return f"{self.workflow} | Step {self.step_order}: {self.role.name} -> {self.target_role.name if self.target_role else 'N/A'} (SLA {self.sla_hours}h)"

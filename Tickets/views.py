@@ -11,8 +11,10 @@ from .models import Ticket, AssignedTicket, WorkflowStep
 from users.models import User
 from Tickets.models import Ticket, Workflow 
 
+from django.contrib.auth.models import User
+
 # ✅ use your services engine (dynamic workflow + fallback)
-from .services import route_new_ticket, approve, reject, add_history
+# from .services import route_new_ticket, approve, reject, add_history
 
 
 @csrf_exempt
@@ -23,6 +25,7 @@ def create_ticket(request):
     - Creates Ticket
     - Routes it using the workflow engine based on employee role and workflow steps
     - Sets status dynamically according to the current_role from workflow
+    - Dynamically assigns ticket to a user based on workflow target_role and email mapping
     """
 
     try:
@@ -36,6 +39,7 @@ def create_ticket(request):
     title = data.get("title")
     description = data.get("description")
     role_override = data.get("role")  # Optional override
+    role_email_map = data.get("role_email_map", {})  # Dynamic mapping of role -> email
 
     if not employee_id or not ticket_type_input or not title or not description:
         return JsonResponse({"error": "employee_id, ticket_type, title, description are required"}, status=400)
@@ -103,9 +107,21 @@ def create_ticket(request):
         # 3️⃣ Dynamically set status based on current_role
         ticket.status = f"PENDING_{ticket.current_role}" if ticket.current_role else "PENDING"
 
-        # 4️⃣ Assign ticket to a user with the target_role (if any)
+        # 4️⃣ Assign ticket to a user with the target_role dynamically based on email mapping
+        assigned_user = None
         if first_step.target_role:
-            assigned_user = User.objects.filter(role=first_step.target_role.name).first()
+            target_role_name = first_step.target_role.name
+            target_users = User.objects.filter(role=target_role_name)
+
+            # Get the email from the dynamic role_email_map in request
+            email_to_assign = role_email_map.get(target_role_name)
+
+            if email_to_assign:
+                assigned_user = target_users.filter(email=email_to_assign).first()
+            else:
+                # fallback: pick first user of that role
+                assigned_user = target_users.first()
+
             ticket.assigned_to = assigned_user
 
         ticket.save()
@@ -123,6 +139,7 @@ def create_ticket(request):
         "current_step": ticket.current_step,
         "workflow_id": ticket.workflow_id,
     }, status=201)
+
 
 
 @require_http_methods(["GET"])
@@ -465,26 +482,24 @@ def ticket_history(request, employee_id=None, ticket_id=None):
 #     except Exception as e:
 #         return JsonResponse({"error": str(e)}, status=400)
 
-
-
 @csrf_exempt
 @require_http_methods(["POST"])
 def ticket_action(request, ticket_id):
-    """
-    Generic ticket action API for dynamic workflow approval/rejection
-    Handles multi-role workflow and dynamically updates ticket status
-    """
+
     try:
         data = json.loads(request.body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    action = (data.get("action") or "").upper()
+    action = (data.get("action") or "").strip().lower()
     remarks = data.get("remarks", "")
+    role_email_map = data.get("role_email_map", {})
+    ticket_creator_role = (data.get("role") or "").strip()
 
-    if action not in ["APPROVE", "REJECT"]:
-        return JsonResponse({"error": "action must be APPROVE or REJECT"}, status=400)
+    if action not in ["approve", "reject"]:
+        return JsonResponse({"error": "action must be 'approve' or 'reject'"}, status=400)
 
+    # Fetch ticket
     try:
         ticket = Ticket.objects.get(id=ticket_id)
     except Ticket.DoesNotExist:
@@ -494,64 +509,116 @@ def ticket_action(request, ticket_id):
     if not workflow:
         return JsonResponse({"error": "Ticket has no workflow assigned"}, status=400)
 
-    # Determine actor (current role user)
-    actor_role_name = ticket.current_role
-    actor = User.objects.filter(role=actor_role_name).first()
-    if not actor:
-        return JsonResponse({"error": f"No user found for role {actor_role_name}"}, status=400)
+    # Use the creator's role to determine workflow path
+    creator_role_name = ticket.created_by_role
+    current_role_name = ticket.current_role
+    current_step_order = ticket.current_step
 
-    try:
-        # -------------------------------
-        # Handle APPROVE / REJECT actions
-        # -------------------------------
-        if action == "REJECT":
-            # Mark ticket as rejected
-            ticket.status = "REJECTED"
-            ticket.save()
-        else:
-            # APPROVE: move to next workflow step
-            current_step_order = ticket.current_step
+    if not creator_role_name:
+        return JsonResponse({"error": "Ticket has no creator role"}, status=400)
 
-            # Find next step in workflow after current step
-            next_step = WorkflowStep.objects.filter(
-                workflow=workflow,
-                step_order__gt=current_step_order
-            ).order_by("step_order").first()
+    # Prevent creator from approving their own ticket
+    if ticket_creator_role == current_role_name:
+        return JsonResponse(
+            {"error": f"Role '{ticket_creator_role}' cannot act on their own ticket"},
+            status=403
+        )
 
-            if next_step:
-                # Move ticket to next step
-                ticket.current_step = next_step.step_order
-                ticket.current_role = next_step.target_role.name if next_step.target_role else next_step.role.name
+    # -------------------------
+    # REJECT LOGIC
+    # -------------------------
+    if action == "reject":
+        ticket.status = "REJECTED"
+        ticket.current_role = None
+        ticket.current_step = 0  # Set to 0 instead of None (NOT NULL constraint)
+        ticket.assigned_to = None
+        ticket.save()
 
-                # Dynamically set status based on current_role
-                ticket.status = f"PENDING_{ticket.current_role}" if ticket.current_role else "PENDING"
-
-                # Assign ticket to a user in the next role
-                assigned_user = User.objects.filter(role=ticket.current_role).first()
-                ticket.assigned_to = assigned_user
-            else:
-                # No next step: mark ticket as completed
-                ticket.status = "COMPLETED"
-                ticket.current_role = None
-                ticket.current_step = ticket.current_step  # remains last step
-                ticket.assigned_to = None
-
-            ticket.save()
-
-        # Optionally: log action in AssignedTicket table
+        # Log the rejection in history
         AssignedTicket.objects.create(
             ticket=ticket,
-            assigned_to=actor,
-            role=actor_role_name,
-            status=action,
+            assigned_to=ticket.assigned_to or ticket.employee,
+            role=current_role_name,
+            status="REJECTED",
             remarks=remarks
         )
 
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=400)
+        return JsonResponse({
+            "message": "Ticket rejected successfully",
+            "ticket_id": ticket.id,
+            "status": ticket.status
+        }, status=200)
+
+    # -------------------------
+    # APPROVE LOGIC
+    # -------------------------
+
+    # 1️⃣ Get ALL workflow steps for the CREATOR's role (not current_role)
+    creator_role_steps = WorkflowStep.objects.filter(
+        workflow=workflow,
+        role__name=creator_role_name
+    ).order_by("step_order")
+
+    if not creator_role_steps.exists():
+        return JsonResponse({
+            "error": f"No workflow steps found for creator role '{creator_role_name}'"
+        }, status=400)
+
+    # 2️⃣ Find the current step in the creator's workflow
+    current_step = creator_role_steps.filter(step_order=current_step_order).first()
+
+    if not current_step:
+        return JsonResponse({
+            "error": f"Current step {current_step_order} not found in workflow for role '{creator_role_name}'"
+        }, status=400)
+
+    # Log the approval in history
+    AssignedTicket.objects.create(
+        ticket=ticket,
+        assigned_to=ticket.assigned_to or ticket.employee,
+        role=current_role_name,
+        status="APPROVED",
+        remarks=remarks
+    )
+
+    # 3️⃣ Check if there's a next step in the creator's role workflow
+    next_step = creator_role_steps.filter(step_order__gt=current_step_order).first()
+
+    if next_step:
+        # Move to next step in creator's workflow
+        ticket.current_step = next_step.step_order
+        next_target_role = next_step.target_role.name if next_step.target_role else None
+
+        if next_target_role:
+            ticket.current_role = next_target_role
+            ticket.status = f"PENDING_{next_target_role}"
+
+            # Assign to user with next target role
+            target_users = User.objects.filter(role=next_target_role)
+            assigned_user = (
+                target_users.filter(email=role_email_map.get(next_target_role)).first()
+                if role_email_map.get(next_target_role)
+                else target_users.first()
+            )
+            ticket.assigned_to = assigned_user
+        else:
+            # No target role specified, complete ticket
+            ticket.current_role = None
+            ticket.current_step = 0  # Set to 0 instead of None (NOT NULL constraint)
+            ticket.assigned_to = None
+            ticket.status = "COMPLETED"
+
+    else:
+        # 4️⃣ No more steps in creator's workflow → complete ticket
+        ticket.current_role = None
+        ticket.current_step = 0  # Set to 0 instead of None (NOT NULL constraint)
+        ticket.assigned_to = None
+        ticket.status = "COMPLETED"
+
+    ticket.save()
 
     return JsonResponse({
-        "message": f"Ticket {action}D successfully",
+        "message": "Ticket approved successfully",
         "ticket_id": ticket.id,
         "status": ticket.status,
         "current_role": ticket.current_role,
@@ -594,3 +661,66 @@ def delete_ticket(request, ticket_id):
     # If no workflow or first step not acted → allow deletion
     ticket.delete()
     return JsonResponse({"message": f"Ticket #{ticket_id} deleted successfully"}, status=200)
+
+
+
+# new 
+
+# ---------------------------
+# Dashboard API to list tickets assigned to a user
+# ---------------------------
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.http import JsonResponse
+from django.contrib.auth import get_user_model
+from .models import Ticket
+
+User = get_user_model()
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def dashboard_tickets(request, user_id):
+    """
+    Get all tickets assigned to a user according to workflow.
+    Works with custom User models.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    tickets = Ticket.objects.filter(assigned_to=user).select_related("workflow", "employee")
+
+    ticket_list = []
+    for ticket in tickets:
+        # Safely get user display names
+        assigned_name = getattr(ticket.assigned_to, "email", str(ticket.assigned_to))
+        employee_name = getattr(ticket.employee, "email", str(ticket.employee))
+
+        ticket_list.append({
+            "ticket_id": ticket.id,
+            "title": ticket.title,
+            "description": ticket.description,
+            "ticket_type": ticket.ticket_type,
+            "status": ticket.status,
+            "current_step": ticket.current_step,
+            "current_role": ticket.current_role,
+            "assigned_to": {
+                "id": ticket.assigned_to.id,
+                "name": assigned_name,
+                "email": getattr(ticket.assigned_to, "email", None)
+            } if ticket.assigned_to else None,
+            "workflow_id": ticket.workflow.id if ticket.workflow else None,
+            "employee": {
+                "id": ticket.employee.id,
+                "name": employee_name,
+                "email": getattr(ticket.employee, "email", None),
+                "role": getattr(ticket.employee, "role", None)
+            }
+        })
+
+    return JsonResponse({
+        "message": f"Tickets assigned to {getattr(user, 'email', str(user))}",
+        "tickets": ticket_list,
+        "total": tickets.count()
+    })

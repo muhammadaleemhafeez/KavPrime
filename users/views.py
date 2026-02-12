@@ -90,8 +90,8 @@ def register_user(request):
 
     except IntegrityError as e:
         return JsonResponse({"error": "Database error", "detail": str(e)}, status=400)
-
-# add new user
+    
+    
 @csrf_exempt
 def login_user(request):
     if request.method != "POST":
@@ -131,37 +131,37 @@ def login_user(request):
 
         role_key = user.role.upper()
 
-        # Fetch latest active workflow
-        workflow = Workflow.objects.filter(is_active=True).order_by("-version").first()
+        # ✅ Fetch the ONLY active workflow
+        workflow = Workflow.objects.filter(is_active=True).first()
 
         workflow_data = None
+
         if workflow:
-            # Fetch all steps in order
-            steps = WorkflowStep.objects.filter(workflow=workflow).order_by("step_order")
+            # ✅ Get steps only for logged-in role
+            relevant_steps = WorkflowStep.objects.filter(
+                workflow=workflow,
+                role__name__iexact=role_key
+            ).order_by("step_order")
 
-            # Only include steps where logged-in user is the main role
-            relevant_steps = []
-            for s in steps:
-                main_role_name = s.role.name.upper() if s.role else ""
-                if main_role_name == role_key:
-                    relevant_steps.append({
-                        "step_order": s.step_order,
-                        "role": s.role.name if s.role else None,
-                        "target_role": s.target_role.name if s.target_role else None,
-                        "sla_hours": s.sla_hours
-                    })
+            steps_data = [
+                {
+                    "step_order": step.step_order,
+                    "role": step.role.name if step.role else None,
+                    "target_role": step.target_role.name if step.target_role else None,
+                    "sla_hours": step.sla_hours
+                }
+                for step in relevant_steps
+            ]
 
-            # Prepare workflow data
             workflow_data = {
                 "workflow_id": workflow.id,
                 "ticket_type": workflow.ticket_type,
                 "version": workflow.version,
                 "workflow_name": workflow.workflow_name,
                 "description": workflow.description,
-                "steps": relevant_steps
+                "steps": steps_data
             }
 
-        # Final response
         return JsonResponse({
             "message": "Login successful",
             "user_id": user.id,

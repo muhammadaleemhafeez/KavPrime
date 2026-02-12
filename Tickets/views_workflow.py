@@ -206,7 +206,6 @@ def active_workflow_step1_role(request):
         "sla_hours": step1.sla_hours
     }, status=200)
 
-
 # ✅ NEW API: Create Workflow + Attach Roles
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -222,7 +221,7 @@ def create_workflow_with_roles(request):
       "is_active": true,
       "roles": [
         {
-          "role": "TEAM_PMO",   # main role
+          "role": "TEAM_PMO",
           "steps": [
             { "step_order": 1, "target_role": "SENIOR_PMO", "sla_hours": 4 },
             { "step_order": 2, "target_role": "ADMIN", "sla_hours": 3 }
@@ -292,12 +291,12 @@ def create_workflow_with_roles(request):
             Workflow.objects.filter(ticket_type=ticket_type).exclude(id=wf.id).update(is_active=False)
 
         # Create workflow steps
-        global_step = 1
         for r in roles_data:
             main_role_name = r["role"].strip()
             main_role_obj, _ = Role.objects.get_or_create(name=main_role_name)
 
             role_steps = []
+            role_step_order = 1  # ✅ Start from 1 for each role
             for s in r["steps"]:
                 target_role_name = s["target_role"].strip()
                 target_role_obj, _ = Role.objects.get_or_create(name=target_role_name)
@@ -305,12 +304,12 @@ def create_workflow_with_roles(request):
 
                 step = WorkflowStep.objects.create(
                     workflow=wf,
-                    step_order=global_step,
+                    step_order=role_step_order,  # Use per-role step order
                     role=main_role_obj,
                     target_role=target_role_obj,
                     sla_hours=sla
                 )
-                global_step += 1
+                role_step_order += 1
 
                 role_steps.append({
                     "step_order": step.step_order,

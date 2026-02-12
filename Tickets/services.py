@@ -117,188 +117,141 @@ def start_workflow(ticket):
         notify(ticket.employee.email, f"Ticket #{ticket.id} created", f"Your ticket is pending {role_name}.")
     return True
 
-def route_new_ticket(ticket: Ticket):
-    # ✅ GLOBAL selection (ignore ticket.ticket_type)
-    wf = get_active_workflow_global()
+# def route_new_ticket(ticket: Ticket):
+#     """
+#     Route a new ticket to the first step of the active workflow.
+#     Fully dynamic — no hardcoded roles.
+#     """
+#     workflow = Workflow.objects.filter(
+#         ticket_type=ticket.ticket_type,
+#         is_active=True
+#     ).order_by("-id").first()
 
-    if not wf:
-        # fallback behavior if NO workflows exist in DB
-        ticket.status = "PENDING_TEAM_PMO"
-        ticket.current_role = "TEAM_PMO"
-        ticket.current_step = 1
-        ticket.workflow = None
-        ticket.step_deadline = None
-        ticket.save(update_fields=["status", "current_role", "current_step", "workflow", "step_deadline"])
-        return
+#     if not workflow:
+#         # fallback if no workflow
+#         ticket.workflow = None
+#         ticket.current_role = "TEAM_PMO"
+#         ticket.current_step = 1
+#         ticket.status = "PENDING_TEAM_PMO"
+#         ticket.assigned_to = get_first_by_role("TEAM_PMO")
+#         ticket.step_deadline = None
+#         ticket.save()
+#         add_history(ticket, ticket.assigned_to, "TEAM_PMO", "ASSIGNED", "Fallback assignment")
+#         return
 
-    step1 = (
-        WorkflowStep.objects
-        .filter(workflow=wf, step_order=1)
-        .select_related("role")
-        .first()
-    )
-    if not step1:
-        raise Exception("Active workflow has no step 1")
+#     # Get first step in workflow
+#     step1 = WorkflowStep.objects.filter(workflow=workflow).order_by("role", "step_order").first()
+#     if not step1:
+#         # fallback if misconfigured
+#         ticket.workflow = workflow
+#         ticket.current_role = "TEAM_PMO"
+#         ticket.current_step = 1
+#         ticket.status = "PENDING_TEAM_PMO"
+#         ticket.assigned_to = get_first_by_role("TEAM_PMO")
+#         ticket.step_deadline = None
+#         ticket.save()
+#         add_history(ticket, ticket.assigned_to, "TEAM_PMO", "ASSIGNED", "Fallback assignment")
+#         return
 
-    role_name = step1.role.name
+#     # Determine assignee (target_role preferred)
+#     next_role_name = step1.target_role.name if step1.target_role else step1.role.name
+#     assignee = get_first_by_role(next_role_name)
 
-    # Assign to first active user of that role (dynamic role_obj preferred, fallback to role string)
-    actor = (
-        User.objects.filter(is_active=True, role_obj__name=role_name).first()
-        or User.objects.filter(is_active=True, role=role_name).first()
-    )
-
-    ticket.workflow = wf
-    ticket.current_step = 1
-    ticket.current_role = role_name
-    ticket.status = f"PENDING_{role_name}"
-    ticket.step_deadline = timezone.now() + timedelta(hours=step1.sla_hours)
-    ticket.assigned_to = actor  # can be None
-    ticket.save()
-
-    # History row
-    if actor:
-        AssignedTicket.objects.create(
-            ticket=ticket,
-            assigned_to=actor,
-            role=role_name,
-            status="ASSIGNED",
-            remarks=f"Auto assigned via GLOBAL workflow step 1 (SLA {step1.sla_hours}h)"
-        )
-    else:
-        AssignedTicket.objects.create(
-            ticket=ticket,
-            assigned_to=ticket.employee,
-            role=role_name,
-            status="ASSIGNED",
-            remarks=f"No user found for role {role_name}. Ticket created but not assigned."
-        )
-
-        
-def approve(ticket, actor, remarks=""):
-    """
-    Approve a ticket according to its workflow dynamically.
-    Works for any role that created the ticket or is in workflow steps.
-    """
-    actor_role = getattr(actor, "role", None) or getattr(actor, "role_name", "")
-
-    # -----------------------
-    # WORKFLOW MODE
-    # -----------------------
-    if ticket.workflow:
-        # Record the approval by the actor
-        add_history(ticket, actor, actor_role, "APPROVED", remarks)
-
-        # Fetch all workflow steps ordered by step_order
-        workflow_steps = ticket.workflow.workflowstep_set.order_by("step_order").all()
-
-        # Determine the next step based on current_step
-        next_step = None
-        for step in workflow_steps:
-            if step.step_order > ticket.current_step:
-                next_step = step
-                break
-
-        # If no next step → ticket completed
-        if not next_step:
-            ticket.status = "COMPLETED"
-            ticket.current_role = None
-            ticket.step_deadline = None
-            ticket.assigned_to = None
-            ticket.save(update_fields=["status", "current_role", "step_deadline", "assigned_to"])
-
-            # Notify final recipients (HR + TEAM_PMO + Employee)
-            recipients = get_emails_by_role("HR") + get_emails_by_role("TEAM_PMO")
-            if getattr(ticket.employee, "email", None):
-                recipients.append(ticket.employee.email)
-
-            notify(
-                list(set(recipients)),
-                f"Ticket #{ticket.id} completed",
-                "Ticket workflow has been fully completed."
-            )
-            return
-
-        # Assign ticket to next step dynamically
-        # Use target_role if defined, otherwise the main step role
-        next_role_name = next_step.target_role.name if next_step.target_role else next_step.role.name
-        assignee = get_first_by_role(next_role_name)
-        if not assignee:
-            raise ValueError(f"No user found for role: {next_role_name}")
-
-        # Update ticket for next step
-        ticket.current_step = next_step.step_order
-        ticket.current_role = next_role_name
-        ticket.assigned_to = assignee
-        ticket.step_deadline = timezone.now() + timedelta(hours=next_step.sla_hours or SLA_HOURS_FALLBACK)
-        ticket.status = f"PENDING_{next_role_name}"
-        ticket.save(update_fields=["current_step", "current_role", "assigned_to", "step_deadline", "status"])
-
-        # Record assignment and notify
-        add_history(ticket, assignee, next_role_name, "ASSIGNED", "Moved to next workflow step")
-        notify(
-            assignee.email,
-            f"Ticket #{ticket.id} requires your action",
-            f"Ticket moved to you for role: {next_role_name}"
-        )
-        return
-
-    # -----------------------
-    # FALLBACK MODE (no workflow)
-    # -----------------------
-    # If there is no workflow, fallback to old logic
-    add_history(ticket, actor, actor_role, "APPROVED", remarks)
-
-    # If actor is TEAM_PMO → assign to ADMIN
-    if actor_role == "TEAM_PMO":
-        admin = get_first_by_role("ADMIN")
-        if not admin:
-            raise ValueError("No ADMIN user found")
-
-        ticket.status = "PENDING_ADMIN"
-        ticket.current_role = "ADMIN"
-        ticket.assigned_to = admin
-        ticket.save(update_fields=["status", "current_role", "assigned_to"])
-
-        add_history(ticket, admin, "ADMIN", "ASSIGNED", "Approved by Team PMO → assigned to Admin")
-        notify(admin.email, f"Ticket #{ticket.id} needs action", "Ticket approved by Team PMO.")
-        if getattr(ticket.employee, "email", None):
-            notify(ticket.employee.email, f"Ticket #{ticket.id} approved by Team PMO", "Ticket moved to Admin.")
-        return
-
-    # If actor is ADMIN → complete ticket
-    if actor_role == "ADMIN":
-        ticket.status = "COMPLETED"
-        ticket.current_role = None
-        ticket.assigned_to = None
-        ticket.save(update_fields=["status", "current_role", "assigned_to"])
-
-        recipients = get_emails_by_role("TEAM_PMO") + get_emails_by_role("HR")
-        if getattr(ticket.employee, "email", None):
-            recipients.append(ticket.employee.email)
-
-        notify(
-            list(set(recipients)),
-            f"Ticket #{ticket.id} completed by Admin",
-            "Admin has completed the ticket process."
-        )
-        return
-
-    # If role not allowed
-    raise ValueError(f"Role '{actor_role}' cannot approve tickets.")
+#     ticket.workflow = workflow
+#     ticket.current_role = next_role_name
+#     ticket.current_step = step1.step_order
+#     ticket.status = f"PENDING_{next_role_name}"
+#     ticket.assigned_to = assignee
+#     ticket.step_deadline = timezone.now() + timedelta(hours=step1.sla_hours)
+#     ticket.save()
+#     add_history(ticket, assignee, next_role_name, "ASSIGNED", f"Workflow step 1 assigned ({next_role_name})")
 
 
-def reject(ticket, actor, remarks=""):
-    actor_role = getattr(actor, "role_name", None) or getattr(actor, "role", "")
-    add_history(ticket, actor, actor_role, "REJECTED", remarks)
 
-    ticket.status = "REJECTED"
-    ticket.team_pmo_deadline = None
-    ticket.step_deadline = None
-    ticket.current_role = None
-    ticket.save(update_fields=["status", "team_pmo_deadline", "step_deadline", "current_role"])
+# def approve(ticket, actor, remarks=""):
+#     """
+#     Approve a ticket following workflow steps dynamically.
+#     Fully dynamic — no hardcoded next role.
+#     """
+#     actor_role_name = getattr(actor, "role_name", None) or getattr(actor, "role", "")
+#     add_history(ticket, actor, actor_role_name, "APPROVED", remarks)
 
-    notify(ticket.employee.email, f"Ticket #{ticket.id} rejected", f"Remarks: {remarks}")
+#     if not ticket.workflow:
+#         # fallback mode
+#         ticket.status = "COMPLETED"
+#         ticket.current_role = None
+#         ticket.current_step = None
+#         ticket.assigned_to = None
+#         ticket.save()
+#         return
+
+#     workflow = ticket.workflow
+#     current_role_name = ticket.current_role
+#     current_step_order = ticket.current_step
+
+#     # Steps in current role
+#     role_steps = WorkflowStep.objects.filter(workflow=workflow, role__name=current_role_name).order_by("step_order")
+
+#     # Next step in same role
+#     next_step = role_steps.filter(step_order__gt=current_step_order).first()
+
+#     if next_step:
+#         ticket.current_step = next_step.step_order
+#         ticket.current_role = next_step.target_role.name if next_step.target_role else next_step.role.name
+#     else:
+#         last_step = role_steps.last()
+#         if last_step and last_step.target_role:
+#             next_role = last_step.target_role
+#             next_role_steps = WorkflowStep.objects.filter(workflow=workflow, role=next_role).order_by("step_order")
+#             ticket.current_role = next_role.name
+#             ticket.current_step = next_role_steps.first().step_order if next_role_steps else 1
+#         else:
+#             ticket.current_role = None
+#             ticket.current_step = None
+#             ticket.status = "COMPLETED"
+
+#     # Assign ticket
+#     if ticket.current_role:
+#         ticket.assigned_to = get_first_by_role(ticket.current_role)
+#         ticket.status = f"PENDING_{ticket.current_role}"
+#     else:
+#         ticket.assigned_to = None
+#         ticket.status = "COMPLETED"
+
+#     ticket.save()
+
+#     if ticket.assigned_to:
+#         add_history(ticket, ticket.assigned_to, ticket.current_role, "ASSIGNED", "Moved to next workflow step")
+#         notify(
+#             ticket.assigned_to.email,
+#             f"Ticket #{ticket.id} requires your action",
+#             f"Your role: {ticket.current_role}"
+#         )
+
+
+
+
+# def reject(ticket, actor, remarks=""):
+#     """
+#     Reject a ticket and clear workflow assignment.
+#     """
+#     actor_role_name = getattr(actor, "role_name", None) or getattr(actor, "role", "")
+#     add_history(ticket, actor, actor_role_name, "REJECTED", remarks)
+
+#     ticket.status = "REJECTED"
+#     ticket.current_role = None
+#     ticket.current_step = None
+#     ticket.assigned_to = None
+#     ticket.step_deadline = None
+#     ticket.save()
+
+#     if getattr(ticket.employee, "email", None):
+#         notify(
+#             ticket.employee.email,
+#             f"Ticket #{ticket.id} rejected",
+#             f"Remarks: {remarks}"
+#         )
+
 
 
 def get_active_workflow_global():
