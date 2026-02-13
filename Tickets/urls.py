@@ -26,6 +26,8 @@ urlpatterns = [
     # Ticket history by ticket_id
     path('ticket-history/ticket/<int:ticket_id>/', views.ticket_history, name='ticket-history-ticket'),
 
+    
+
     # ticket approval or rejection dynamically
     # path('action/<int:ticket_id>/', ticket_action, name="ticket_action"),
 

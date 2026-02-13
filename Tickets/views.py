@@ -235,123 +235,124 @@ def update_ticket_status(request):
     }, status=200)
 
 
-
 @require_http_methods(["GET"])
-def ticket_history(request, employee_id=None, ticket_id=None):
+def ticket_history(request, ticket_id):
     """
-    Fetch ticket workflow history:
-    - Filter by employee_id OR ticket_id
-    - For each ticket, show workflow steps with status: APPROVED / REJECTED / CURRENT / PENDING
-    URL examples:
-      /api/tickets/ticket-history/employee/<employee_id>/
-      /api/tickets/ticket-history/ticket/<ticket_id>/
+    Returns the full dynamic workflow history for a single ticket.
+    - Uses ONLY the workflow path of the creator's main role.
+    - Shows states: APPROVED, REJECTED, CURRENT, PENDING
     """
 
-    # Filter tickets based on ticket_id or employee_id
-    if ticket_id:
-        tickets = Ticket.objects.filter(id=ticket_id).select_related("workflow")
-    elif employee_id:
-        tickets = Ticket.objects.filter(employee_id=employee_id).select_related("workflow").order_by("-id")
-    else:
-        return JsonResponse({"error": "employee_id or ticket_id is required"}, status=400)
+    # -------------------------------
+    # 1️⃣ Fetch ticket + workflow
+    # -------------------------------
+    try:
+        t = Ticket.objects.select_related("workflow").get(id=ticket_id)
+    except Ticket.DoesNotExist:
+        return JsonResponse({"error": "Ticket not found"}, status=404)
 
-    if not tickets.exists():
-        return JsonResponse({"message": "No tickets found"}, status=200)
+    creator_role = t.created_by_role
 
-    response = []
+    # -------------------------------
+    # 2️⃣ Load creator-role workflow path
+    # -------------------------------
+    creator_steps = WorkflowStep.objects.filter(
+        workflow_id=t.workflow_id,
+        role__name=creator_role,
+    ).select_related("target_role").order_by("step_order")
 
-    for t in tickets:
-        # Get workflow steps if workflow exists
-        if t.workflow_id:
-            steps_qs = (
-                WorkflowStep.objects
-                .filter(workflow_id=t.workflow_id)
-                .select_related("role")
-                .order_by("step_order")
-            )
-            workflow_steps = [{
-                "step_order": s.step_order,
-                "role": s.role.name,
-                "sla_hours": s.sla_hours
-            } for s in steps_qs]
-        else:
-            workflow_steps = []
-
-        # Get history for ticket actions
-        hist = (
-            AssignedTicket.objects
-            .filter(ticket_id=t.id)
-            .order_by("action_date")
-            .values("role", "status", "remarks", "action_date", "assigned_to_id")
-        )
-
-        last_action_by_role = {}
-        for h in hist:
-            last_action_by_role[h["role"]] = h
-
-        steps_out = []
-
-        for step in workflow_steps:
-            role = step["role"]
-
-            step_state = "PENDING"
-            action_date = None
-            remarks = ""
-
-            if role in last_action_by_role:
-                st = last_action_by_role[role]["status"]
-
-                if st == "APPROVED":
-                    step_state = "APPROVED"
-                elif st == "REJECTED":
-                    step_state = "REJECTED"
-                else:
-                    step_state = "CURRENT"
-
-                action_date = last_action_by_role[role]["action_date"]
-                remarks = last_action_by_role[role]["remarks"] or ""
-
-            # Mark as CURRENT if it's the current_role and still pending
-            if t.current_role == role and step_state == "PENDING":
-                step_state = "CURRENT"
-
-            steps_out.append({
-                "step_order": step["step_order"],
-                "role": role,
-                "sla_hours": step["sla_hours"],
-                "state": step_state,
-                "action_date": action_date,
-                "remarks": remarks,
-            })
-
-        # If ticket rejected, mark remaining steps as PENDING
-        if t.status == "REJECTED" and workflow_steps:
-            rejected_step_order = None
-            for s in steps_out:
-                if s["state"] == "REJECTED":
-                    rejected_step_order = s["step_order"]
-                    break
-            if rejected_step_order:
-                for s in steps_out:
-                    if s["step_order"] > rejected_step_order:
-                        s["state"] = "PENDING"
-
-        response.append({
+    if not creator_steps.exists():
+        return JsonResponse({
             "ticket_id": t.id,
-            "employee_id": t.employee_id,
-            "ticket_type": t.ticket_type,
-            "title": t.title,
-            "description": t.description,   # ✅ Added description
-            "status": t.status,
-            "workflow_id": t.workflow_id,
-            "current_step": t.current_step,
-            "current_role": t.current_role,
-            "created_at": t.created_at,
-            "updated_at": t.updated_at,
-            "steps": steps_out
+            "message": f"No workflow steps found for creator role '{creator_role}'"
+        }, status=200)
+
+    # -------------------------------
+    # 3️⃣ Load approval/assignment history
+    # -------------------------------
+    history = AssignedTicket.objects.filter(ticket=t).order_by("action_date")
+
+    # Map: role → last action info
+    last_action = {}
+    for h in history:
+        last_action[h.role] = {
+            "status": h.status,
+            "remarks": h.remarks,
+            "action_date": h.action_date
+        }
+
+    steps_out = []
+
+    # -------------------------------
+    # 4️⃣ Build step history
+    # -------------------------------
+    for step in creator_steps:
+        target_role = step.target_role.name if step.target_role else None
+        
+        state = "PENDING"
+        remarks = ""
+        action_date = None
+
+        # If this role already acted → use that status
+        if target_role in last_action:
+            act = last_action[target_role]
+            state = act["status"]
+            remarks = act["remarks"]
+            action_date = act["action_date"]
+
+        # Current active reviewer
+        if (
+            t.current_role == target_role 
+            and state == "PENDING"
+            and t.status not in ["COMPLETED", "REJECTED"]
+        ):
+            state = "CURRENT"
+
+        steps_out.append({
+            "step_order": step.step_order,
+            "role": target_role,
+            "sla_hours": step.sla_hours,
+            "state": state,
+            "remarks": remarks,
+            "action_date": action_date,
         })
 
+    # -------------------------------
+    # 5️⃣ If rejected → future steps must show PENDING
+    # -------------------------------
+    if t.status == "REJECTED":
+        rejected_step = None
+        for s in steps_out:
+            if s["state"] == "REJECTED":
+                rejected_step = s["step_order"]
+                break
+
+        if rejected_step:
+            for s in steps_out:
+                if s["step_order"] > rejected_step:
+                    s["state"] = "PENDING"
+
+    # -------------------------------
+    # 6️⃣ Final response for single ticket
+    # -------------------------------
+    response = {
+        "ticket_id": t.id,
+        "employee_id": t.employee_id,
+        "ticket_type": t.ticket_type,
+        "title": t.title,
+        "description": t.description,
+        "status": t.status,
+        "workflow_id": t.workflow_id,
+        "current_step": t.current_step,
+        "current_role": t.current_role,
+        "created_at": t.created_at,
+        "updated_at": t.updated_at,
+        "steps": steps_out,
+    }
+
     return JsonResponse(response, safe=False, status=200)
+
+
 # @require_http_methods(["GET"])
 # def escalate_ticket(request, ticket_id):
 #     """
