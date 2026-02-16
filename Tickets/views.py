@@ -13,9 +13,6 @@ from Tickets.models import Ticket, Workflow
 
 from django.contrib.auth.models import User
 
-# ✅ use your services engine (dynamic workflow + fallback)
-# from .services import route_new_ticket, approve, reject, add_history
-
 
 @csrf_exempt
 @require_http_methods(["POST"])
