@@ -35,7 +35,7 @@ def create_ticket(request):
 
     # Required fields
     employee_id = data.get("employee_id")
-    ticket_type_input = (data.get("ticket_type") or "").strip()
+    ticket_type_input = (data.get("ticket_type") or "").strip()  # <-- no DEFAULT fallback
     title = data.get("title")
     description = data.get("description")
     role_override = data.get("role")  # Optional override
@@ -44,7 +44,9 @@ def create_ticket(request):
     if not employee_id or not ticket_type_input or not title or not description:
         return JsonResponse({"error": "employee_id, ticket_type, title, description are required"}, status=400)
 
+    # -------------------------------
     # Map frontend label -> backend key
+    # -------------------------------
     ticket_type_map = {
         "Repair an Item": "Repair an Item",
         "Request New Item": "Request New Item",
@@ -72,7 +74,7 @@ def create_ticket(request):
     # Create ticket without status yet
     ticket = Ticket.objects.create(
         employee=employee,
-        ticket_type=ticket_type,
+        ticket_type=ticket_type,  # use backend-mapped ticket_type
         title=title,
         description=description,
         created_by_role=employee_role_name
@@ -80,11 +82,11 @@ def create_ticket(request):
 
     try:
         # -------------------------------
-        # ROUTE TICKET BASED ON ACTIVE WORKFLOW
+        # ROUTE TICKET BASED ON LATEST ACTIVE WORKFLOW
         # -------------------------------
-        workflow = Workflow.objects.filter(ticket_type=ticket_type, is_active=True).order_by("-id").first()
+        workflow = Workflow.objects.filter(is_active=True).order_by("-created_at").first()
         if not workflow:
-            raise Exception("No active workflow found for this ticket type")
+            raise Exception("No active workflow found")
 
         ticket.workflow = workflow
 
