@@ -157,6 +157,8 @@ class Asset(models.Model):
         blank=True
     )
 
+    
+
     assigned_date = models.DateField(null=True, blank=True)
     returned_date = models.DateField(null=True, blank=True)
     current_location = models.CharField(max_length=150, null=True, blank=True)
@@ -187,17 +189,16 @@ class Asset(models.Model):
     # ==============================
 
     def save(self, *args, **kwargs):
-        self.issued_quantity = self.total_quantity - self.available_quantity
 
+    # Auto stock status
         if self.available_quantity <= 0:
             self.status = "OUT_OF_STOCK"
         elif self.available_quantity <= self.minimum_stock_level:
             self.status = "LOW_STOCK"
+        else:
+            self.status = "AVAILABLE"
 
         super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.asset_tag} - {self.brand} {self.model_name}"
 
 # describe the asset details
 # # Track Asset Issue / Return History

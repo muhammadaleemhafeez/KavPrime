@@ -14,6 +14,7 @@ from django.views.decorators.http import require_GET
 
 
 
+
 # image processing
 from .models import Asset
 
@@ -321,46 +322,47 @@ def list_assets(request):
     }, safe=False)
 
 
+# get asset by employee_id
+
 @csrf_exempt
 def get_employee_assets(request, employee_id):
-    """Get all assets issued to a specific employee"""
+
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
-    
+
     try:
         employee = User.objects.get(id=employee_id)
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
-    
-    assets = AssetDetails.objects.select_related('inventory', 'issued_by').filter(user=employee)
-    
-    assets_list = []
-    for asset in assets:
-        assets_list.append({
-            "id": asset.id,
-            "inventory_id": asset.inventory.id,
-            "inventory_name": asset.inventory.item_name,
-            "inventory_code": asset.inventory.item_code,
-            "brand": asset.inventory.brand,
-            "model": asset.inventory.model,
-            "quantity_issued": asset.quantity_issued,
-            "quantity_issued_date": asset.quantity_issued_date.isoformat(),
-            "return_date": asset.return_date.isoformat() if asset.return_date else None,
-            "status": asset.status,
-            "remarks": asset.remarks,
-            "issued_by_id": asset.issued_by.id,
-            "issued_by_name": asset.issued_by.name,
-            "created_at": asset.created_at.isoformat(),
-            "updated_at": asset.updated_at.isoformat(),
+
+    records = AssetDetails.objects.select_related("asset", "issued_by") \
+        .filter(user=employee)
+
+    data = []
+    for record in records:
+        asset = record.asset
+
+        data.append({
+            "asset_detail_id": record.id,
+            "asset_id": asset.id,
+            "asset_tag": asset.asset_tag,
+            "brand": asset.brand,
+            "model_name": asset.model_name,
+            "category": asset.category,
+            "quantity_issued": record.quantity_issued,
+            "status": record.status,
+            "issued_date": record.created_at.isoformat(),
+            "return_date": record.return_date.isoformat() if record.return_date else None,
+            "issued_by": record.issued_by.name if record.issued_by else None,
         })
-    
+
     return JsonResponse({
         "employee_id": employee.id,
         "employee_name": employee.name,
-        "employee_email": employee.email,
-        "total_assets": len(assets_list),
-        "assets": assets_list
-    }, safe=False)
+        "total_assets": len(data),
+        "assets": data
+    })
+
 
 
 @csrf_exempt
