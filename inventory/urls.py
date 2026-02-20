@@ -56,4 +56,11 @@ urlpatterns = [
     path("purchase-requests/", list_purchase_requests, name="list_purchase_requests"),
 
 
+    # vendor url
+    path("add-vendor/", views.add_vendor, name="add_vendor"),
+
+    # vendor list url
+    path("vendors/", views.list_vendors, name="list_vendors"),
+
+
 ]

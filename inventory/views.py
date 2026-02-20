@@ -7,7 +7,7 @@ from .models import AssetDetails
 from django.views.decorators.http import require_POST
 from users.models import User
 from django.db.models import F
-from .models import PurchaseRequest, Asset
+from .models import PurchaseRequest, Asset , Vendor
 
 # finance get list of approved request 
 from django.views.decorators.http import require_GET
@@ -759,3 +759,53 @@ def list_purchase_requests(request):
         "total_requests": len(prs_list),
         "purchase_requests": prs_list
     }, safe=False)
+
+
+# add vendor details
+@csrf_exempt
+def add_vendor(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        
+        vendor = Vendor.objects.create(
+            name=data.get("name"),
+            address=data.get("address"),
+            contact_person=data.get("contact_person"),
+            phone=data.get("phone"),
+            email=data.get("email"),
+            gst_number=data.get("gst_number"),
+        )
+
+        return JsonResponse({
+            "message": "Vendor added successfully",
+            "vendor_id": vendor.id,
+        }, status=201)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    
+
+# get vendor list
+
+def list_vendors(request):
+    if request.method != "GET":
+        return JsonResponse({"error": "Only GET method allowed"}, status=405)
+
+    vendors = Vendor.objects.all()
+
+    vendor_list = []
+    for v in vendors:
+        vendor_list.append({
+            "id": v.id,
+            "name": v.name,
+            "address": v.address,
+            "contact_person": v.contact_person,
+            "phone": v.phone,
+            "email": v.email,
+            "gst_number": v.gst_number
+        })
+
+    return JsonResponse({"vendors": vendor_list}, status=200)

@@ -342,3 +342,18 @@ class PurchaseRequest(models.Model):
 
     def __str__(self):
         return f"PR-{self.id} | {self.asset.asset_tag}"
+    
+
+# vendor Details
+
+class Vendor(models.Model):
+    name = models.CharField(max_length=150)
+    address = models.TextField(null=True, blank=True)
+    contact_person = models.CharField(max_length=150, null=True, blank=True)
+    phone = models.CharField(max_length=50, null=True, blank=True)
+    email = models.CharField(max_length=150, null=True, blank=True)
+    gst_number = models.CharField(max_length=100, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
