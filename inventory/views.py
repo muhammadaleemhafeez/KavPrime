@@ -12,65 +12,60 @@ from .models import PurchaseRequest, Asset , Vendor
 # finance get list of approved request 
 from django.views.decorators.http import require_GET
 
+import base64
+from io import BytesIO
+import os
+import qrcode
 
 
 
 # image processing
 from .models import Asset
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}  # jpeg covers jpg + jpeg
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}
 
-# add inventtory
+MEDIA_QR_PATH = "qr_codes/"  
 
-@csrf_exempt
 @require_POST
+@csrf_exempt
 def add_inventory(request):
-    """
-    Add a new asset to the inventory.
-    """
-    # Parse JSON body
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
     try:
-        data = json.loads(request.body.decode('utf-8'))
+        data = json.loads(request.body.decode("utf-8"))
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON."}, status=400)
 
     attachment = request.FILES.get("attachment")
     warranty_docs = request.FILES.get("warranty_documents")
 
-    # Validate uploaded file type
-    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}  # jpeg covers jpg + jpeg
     if attachment and attachment.content_type not in ALLOWED_IMAGE_TYPES:
-        return JsonResponse(
-            {"error": "Only jpg, jpeg, and png files are allowed for attachment."},
-            status=400
-        )
+        return JsonResponse({"error": "Invalid attachment type."}, status=400)
 
-    # Convert quantities to integers
+    def str_to_bool(value):
+        return str(value).lower() in ["true", "1", "yes"]
+
     try:
         total_qty = int(data.get("total_quantity", 1))
         minimum_stock = int(data.get("minimum_stock_level", 0))
         available_qty = int(data.get("available_quantity", total_qty))
     except ValueError:
-        return JsonResponse(
-            {"error": "total_quantity, available_quantity, and minimum_stock_level must be integers."},
-            status=400
-        )
+        return JsonResponse({"error": "Quantity fields must be integers."}, status=400)
 
     try:
+        # Create Asset
         asset = Asset.objects.create(
-            asset_tag=data.get("asset_tag"),  # NOW this will be correctly read
+            asset_tag=data.get("asset_tag"),
             serial_number=data.get("serial_number"),
             model_number=data.get("model_number"),
             brand=data.get("brand"),
             model_name=data.get("model_name"),
             category=data.get("category"),
             type=data.get("type"),
-            barcode_qr_code=data.get("barcode_qr_code"),
-
             total_quantity=total_qty,
             available_quantity=available_qty,
             minimum_stock_level=minimum_stock,
-
             processor=data.get("processor"),
             processor_generation=data.get("processor_generation"),
             ram_size=data.get("ram_size"),
@@ -80,18 +75,15 @@ def add_inventory(request):
             graphics_card=data.get("graphics_card"),
             battery_health=data.get("battery_health"),
             os_installed=data.get("os_installed"),
-
             screen_size_inch=data.get("screen_size_inch") or None,
             resolution=data.get("resolution"),
             panel_type=data.get("panel_type"),
-            touchscreen=data.get("touchscreen") in ["true", "True", "1"],
-            curved_screen=data.get("curved_screen") in ["true", "True", "1"],
+            touchscreen=str_to_bool(data.get("touchscreen")),
+            curved_screen=str_to_bool(data.get("curved_screen")),
             input_ports=data.get("input_ports"),
-            usb_hub_available=data.get("usb_hub_available") in ["true", "True", "1"],
-            speakers_available=data.get("speakers_available") in ["true", "True", "1"],
-
+            usb_hub_available=str_to_bool(data.get("usb_hub_available")),
+            speakers_available=str_to_bool(data.get("speakers_available")),
             connectivity_type=data.get("connectivity_type"),
-
             purchase_date=data.get("purchase_date"),
             purchase_price=data.get("purchase_price"),
             vendor_name=data.get("vendor_name"),
@@ -99,29 +91,62 @@ def add_inventory(request):
             warranty_start=data.get("warranty_start"),
             warranty_end=data.get("warranty_end"),
             warranty_status=data.get("warranty_status"),
-
-            status=data.get("status") or "AVAILABLE",
             condition=data.get("condition") or "NEW",
             current_location=data.get("current_location"),
-            assigned_to_id=data.get("assigned_to") or None,
-            assigned_date=data.get("assigned_date"),
-            returned_date=data.get("returned_date"),
-
             remarks=data.get("remarks"),
             attachment=attachment,
             warranty_documents=warranty_docs
         )
 
+        # Assign to user if provided
+        assigned_to_id = data.get("assigned_to")
+        if assigned_to_id:
+            try:
+                user = User.objects.get(id=assigned_to_id)
+                asset.assigned_to = user
+                asset.save(update_fields=["assigned_to"])
+            except User.DoesNotExist:
+                return JsonResponse({"error": "Assigned user not found."}, status=400)
+
+        # ---------------------------
+        # Generate QR code as PNG file
+        # ---------------------------
+        qr_data = json.dumps({
+            "asset_tag": asset.asset_tag,
+            "model_number": asset.model_number,
+            "brand": asset.brand,
+            "category": asset.category,
+        })
+        qr = qrcode.make(qr_data)
+        buffer = BytesIO()
+        qr.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        # Save QR to media/qr_codes/<asset_tag>.png
+        qr_filename = f"{asset.asset_tag}_qr.png"
+        qr_path = os.path.join(MEDIA_QR_PATH, qr_filename)
+        with open(os.path.join("media", qr_path), "wb") as f:
+            f.write(buffer.getvalue())
+
+        # Store only the filename/path in CharField
+        asset.barcode_qr_code = qr_path[:100]  # ensure it fits max_length
+        asset.save(update_fields=["barcode_qr_code"])
+
         return JsonResponse({
             "message": "Asset added successfully",
             "asset_id": asset.id,
             "asset_tag": asset.asset_tag,
+            "assigned_to_id": asset.assigned_to.id if asset.assigned_to else None,
+            "qr_code_path": asset.barcode_qr_code,
             "attachment": asset.attachment.url if asset.attachment else None,
             "warranty_documents": asset.warranty_documents.url if asset.warranty_documents else None
         }, status=201)
 
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        import logging
+        logging.exception("Error adding asset")
+        return JsonResponse({"error": "Internal server error."}, status=500)
+
 
 
 # -------------------------------
@@ -326,7 +351,6 @@ def list_assets(request):
 
 @csrf_exempt
 def get_employee_assets(request, employee_id):
-
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
 
@@ -335,15 +359,31 @@ def get_employee_assets(request, employee_id):
     except User.DoesNotExist:
         return JsonResponse({"error": "Employee not found"}, status=404)
 
-    records = AssetDetails.objects.select_related("asset", "issued_by") \
-        .filter(user=employee)
+    # 1️⃣ Assets assigned to this employee
+    assigned_assets = Asset.objects.filter(assigned_to=employee)
 
     data = []
-    for record in records:
-        asset = record.asset
-
+    for asset in assigned_assets:
         data.append({
-            "asset_detail_id": record.id,
+            "asset_id": asset.id,
+            "asset_tag": asset.asset_tag,
+            "brand": asset.brand,
+            "model_name": asset.model_name,
+            "category": asset.category,
+            "quantity_issued": None,  # Not issued yet
+            "status": "ASSIGNED",
+            "issued_date": None,
+            "return_date": None,
+            "issued_by": None,
+        })
+
+    # 2️⃣ Assets actually issued (if needed)
+    issued_records = AssetDetails.objects.select_related("asset", "issued_by") \
+        .filter(user=employee)
+
+    for record in issued_records:
+        asset = record.asset
+        data.append({
             "asset_id": asset.id,
             "asset_tag": asset.asset_tag,
             "brand": asset.brand,
@@ -362,7 +402,6 @@ def get_employee_assets(request, employee_id):
         "total_assets": len(data),
         "assets": data
     })
-
 
 
 @csrf_exempt
