@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Asset Details - {{ asset.asset_tag }}</title>
+    <style>
+        /* Base styling */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #e0f7fa; /* Soft teal background */
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+
+        /* Card style */
+        .card {
+            background: #ffffff;
+            border-radius: 15px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            padding: 30px;
+            border-left: 8px solid #00796b; /* teal accent */
+        }
+
+        h1 {
+            color: #004d40;
+            font-size: 2em;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        h2 {
+            color: #00796b;
+            font-size: 1.3em;
+            margin-top: 25px;
+            margin-bottom: 12px;
+            border-bottom: 2px solid #b2dfdb;
+            padding-bottom: 5px;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        li {
+            margin: 8px 0;
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+            align-items: center;
+        }
+
+        strong {
+            color: #004d40;
+            font-weight: 600;
+        }
+
+        a {
+            color: #00796b;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        /* Badges */
+        .badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .badge-new { background-color: #388e3c; }       /* green */
+        .badge-used { background-color: #f57c00; }      /* orange */
+        .badge-active { background-color: #0288d1; }    /* blue */
+        .badge-expired { background-color: #d32f2f; }   /* red */
+        .badge-none { background-color: #757575; }      /* grey */
+
+        .qr-container {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .qr-container img {
+            width: 200px;
+            height: 200px;
+            border: 3px solid #00796b;
+            border-radius: 15px;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            li {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Asset Details: {{ asset.asset_tag }}</h1>
+
+            <h2>General Information</h2>
+            <ul>
+                <li><strong>Model:</strong> {{ asset.model_number }}</li>
+                <li><strong>Brand:</strong> {{ asset.brand }}</li>
+                <li><strong>Category:</strong> {{ asset.category }}</li>
+                <li><strong>Type:</strong> {{ asset.type }}</li>
+                <li><strong>Serial Number:</strong> {{ asset.serial_number }}</li>
+            </ul>
+
+            <h2>Specifications</h2>
+            <ul>
+                <li><strong>Processor:</strong> {{ asset.processor }} {% if asset.processor_generation %}({{ asset.processor_generation }}){% endif %}</li>
+                <li><strong>RAM:</strong> {{ asset.ram_size }} {% if asset.ram_type %}{{ asset.ram_type }}{% endif %}</li>
+                <li><strong>Storage:</strong> {{ asset.storage_capacity }} {% if asset.storage_type %}{{ asset.storage_type }}{% endif %}</li>
+                <li><strong>Graphics Card:</strong> {{ asset.graphics_card }}</li>
+                <li><strong>Battery Health:</strong> {{ asset.battery_health }}%</li>
+                <li><strong>OS Installed:</strong> {{ asset.os_installed }}</li>
+                <li><strong>Screen Size:</strong> {{ asset.screen_size_inch }} inch</li>
+                <li><strong>Resolution:</strong> {{ asset.resolution }}</li>
+                <li><strong>Panel Type:</strong> {{ asset.panel_type }}</li>
+                <li><strong>Touchscreen:</strong> {% if asset.touchscreen %}<span class="badge badge-active">Yes</span>{% else %}<span class="badge badge-none">No</span>{% endif %}</li>
+                <li><strong>Curved Screen:</strong> {% if asset.curved_screen %}<span class="badge badge-active">Yes</span>{% else %}<span class="badge badge-none">No</span>{% endif %}</li>
+            </ul>
+
+            <h2>Stock & Connectivity</h2>
+            <ul>
+                <li><strong>Total Quantity:</strong> {{ asset.total_quantity }}</li>
+                <li><strong>Available Quantity:</strong> {{ asset.available_quantity }}</li>
+                <li><strong>Issued Quantity:</strong> {{ asset.issued_quantity }}</li>
+                <li><strong>Minimum Stock Level:</strong> {{ asset.minimum_stock_level }}</li>
+                <li><strong>Input Ports:</strong> {{ asset.input_ports }}</li>
+                <li><strong>USB Hub:</strong> {% if asset.usb_hub_available %}<span class="badge badge-active">Yes</span>{% else %}<span class="badge badge-none">No</span>{% endif %}</li>
+                <li><strong>Speakers:</strong> {% if asset.speakers_available %}<span class="badge badge-active">Yes</span>{% else %}<span class="badge badge-none">No</span>{% endif %}</li>
+                <li><strong>Connectivity Type:</strong> {{ asset.connectivity_type }}</li>
+            </ul>
+
+            <h2>Purchase & Warranty</h2>
+            <ul>
+                <li><strong>Purchase Date:</strong> {{ asset.purchase_date }}</li>
+                <li><strong>Purchase Price:</strong> {{ asset.purchase_price }}</li>
+                <li><strong>Vendor Name:</strong> {{ asset.vendor_name }}</li>
+                <li><strong>Invoice Number:</strong> {{ asset.invoice_number }}</li>
+                <li><strong>Warranty Start:</strong> {{ asset.warranty_start }}</li>
+                <li><strong>Warranty End:</strong> {{ asset.warranty_end }}</li>
+                <li><strong>Warranty Status:</strong>
+                    {% if asset.warranty_status == "ACTIVE" %}
+                        <span class="badge badge-active">ACTIVE</span>
+                    {% elif asset.warranty_status == "EXPIRED" %}
+                        <span class="badge badge-expired">EXPIRED</span>
+                    {% else %}
+                        <span class="badge badge-none">{{ asset.warranty_status }}</span>
+                    {% endif %}
+                </li>
+            </ul>
+
+            <h2>Other Details</h2>
+            <ul>
+                <li><strong>Condition:</strong>
+                    {% if asset.condition == "NEW" %}
+                        <span class="badge badge-new">NEW</span>
+                    {% elif asset.condition == "USED" %}
+                        <span class="badge badge-used">USED</span>
+                    {% else %}
+                        <span class="badge badge-none">{{ asset.condition }}</span>
+                    {% endif %}
+                </li>
+                <li><strong>Current Location:</strong> {{ asset.current_location }}</li>
+                <li><strong>Assigned To:</strong>
+                    {% if asset.assigned_to %}
+                        <span class="badge badge-active">{{ asset.assigned_to.username }}</span>
+                    {% else %}
+                        <span class="badge badge-none">None</span>
+                    {% endif %}
+                </li>
+                <li><strong>Remarks:</strong> {{ asset.remarks }}</li>
+                <li><strong>Attachment:</strong>
+                    {% if asset.attachment %}
+                        <a href="{{ asset.attachment.url }}" target="_blank">Download</a>
+                    {% else %}
+                        None
+                    {% endif %}
+                </li>
+                <li><strong>Warranty Documents:</strong>
+                    {% if asset.warranty_documents %}
+                        <a href="{{ asset.warranty_documents.url }}" target="_blank">Download</a>
+                    {% else %}
+                        None
+                    {% endif %}
+                </li>
+            </ul>
+
+            <div class="qr-container">
+                <h2>QR Code</h2>
+                {% if asset.barcode_qr_code %}
+                    <img src="{{ asset.barcode_qr_code.url }}" alt="QR Code">
+                {% else %}
+                    <span class="badge badge-none">Not generated</span>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>

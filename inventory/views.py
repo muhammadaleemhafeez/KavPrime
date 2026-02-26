@@ -12,12 +12,12 @@ from .models import PurchaseRequest, Asset , Vendor
 # finance get list of approved request 
 from django.views.decorators.http import require_GET
 
-import base64
+import base64 , os , qrcode, logging
 from io import BytesIO
-import os
-import qrcode
+# import os
+# import qrcode
 
-
+from django.conf import settings
 
 # image processing
 from .models import Asset
@@ -29,9 +29,6 @@ MEDIA_QR_PATH = "qr_codes/"
 @require_POST
 @csrf_exempt
 def add_inventory(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
     try:
         data = json.loads(request.body.decode("utf-8"))
     except json.JSONDecodeError:
@@ -46,6 +43,7 @@ def add_inventory(request):
     def str_to_bool(value):
         return str(value).lower() in ["true", "1", "yes"]
 
+    # Convert quantities safely
     try:
         total_qty = int(data.get("total_quantity", 1))
         minimum_stock = int(data.get("minimum_stock_level", 0))
@@ -54,7 +52,7 @@ def add_inventory(request):
         return JsonResponse({"error": "Quantity fields must be integers."}, status=400)
 
     try:
-        # Create Asset
+        # 1️⃣ Create Asset
         asset = Asset.objects.create(
             asset_tag=data.get("asset_tag"),
             serial_number=data.get("serial_number"),
@@ -98,7 +96,7 @@ def add_inventory(request):
             warranty_documents=warranty_docs
         )
 
-        # Assign to user if provided
+        # 2️⃣ Assign to user if provided
         assigned_to_id = data.get("assigned_to")
         if assigned_to_id:
             try:
@@ -108,46 +106,40 @@ def add_inventory(request):
             except User.DoesNotExist:
                 return JsonResponse({"error": "Assigned user not found."}, status=400)
 
-        # ---------------------------
-        # Generate QR code as PNG file
-        # ---------------------------
-        qr_data = json.dumps({
-            "asset_tag": asset.asset_tag,
-            "model_number": asset.model_number,
-            "brand": asset.brand,
-            "category": asset.category,
-        })
-        qr = qrcode.make(qr_data)
+        # 3️⃣ Generate static QR code with Inventory API URL
+        qr_url = f"http://192.168.18.160:8000/api/inventory/assets/{asset.id}/details/"
+        qr = qrcode.make(qr_url)
         buffer = BytesIO()
         qr.save(buffer, format="PNG")
         buffer.seek(0)
 
         # Save QR to media/qr_codes/<asset_tag>.png
+        qr_folder = os.path.join(settings.MEDIA_ROOT, MEDIA_QR_PATH)
+        os.makedirs(qr_folder, exist_ok=True)
         qr_filename = f"{asset.asset_tag}_qr.png"
         qr_path = os.path.join(MEDIA_QR_PATH, qr_filename)
-        with open(os.path.join("media", qr_path), "wb") as f:
+        with open(os.path.join(settings.MEDIA_ROOT, qr_path), "wb") as f:
             f.write(buffer.getvalue())
 
-        # Store only the filename/path in CharField
-        asset.barcode_qr_code = qr_path[:100]  # ensure it fits max_length
+        # Store QR path in asset
+        asset.barcode_qr_code = qr_path[:100]  # max_length safety
         asset.save(update_fields=["barcode_qr_code"])
 
+        # 4️⃣ Return JSON response
         return JsonResponse({
             "message": "Asset added successfully",
             "asset_id": asset.id,
             "asset_tag": asset.asset_tag,
             "assigned_to_id": asset.assigned_to.id if asset.assigned_to else None,
             "qr_code_path": asset.barcode_qr_code,
+            "qr_url": qr_url,
             "attachment": asset.attachment.url if asset.attachment else None,
             "warranty_documents": asset.warranty_documents.url if asset.warranty_documents else None
         }, status=201)
 
     except Exception as e:
-        import logging
         logging.exception("Error adding asset")
         return JsonResponse({"error": "Internal server error."}, status=500)
-
-
 
 # -------------------------------
 # UPDATE ASSET
@@ -848,3 +840,12 @@ def list_vendors(request):
         })
 
     return JsonResponse({"vendors": vendor_list}, status=200)
+
+
+
+from django.shortcuts import get_object_or_404, render
+from .models import Asset
+
+def asset_details(request, asset_id):
+    asset = get_object_or_404(Asset, id=asset_id)
+    return render(request, "asset_detail.html", {"asset": asset})

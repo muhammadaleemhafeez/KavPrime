@@ -12,7 +12,8 @@ from .views import (
     get_asset_detail,
     return_all_employee_assets,
     create_purchase_request,
-    list_purchase_requests
+    list_purchase_requests,
+    asset_details
 )
 
 urlpatterns = [
@@ -61,6 +62,9 @@ urlpatterns = [
 
     # vendor list url
     path("vendors/", views.list_vendors, name="list_vendors"),
+
+
+    path("assets/<int:asset_id>/details/", asset_details, name="asset_details")
 
 
 ]
