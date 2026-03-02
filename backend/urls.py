@@ -23,6 +23,9 @@ urlpatterns = [
 
     # If you want a direct workflow create URL (optional, can also be under users)
     path("api/workflows/create-with-roles/", create_workflow_with_roles),
+
+
+    path("api/reports/", include("reports.urls")),
 ]
 
 if settings.DEBUG:
