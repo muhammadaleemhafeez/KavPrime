@@ -1,9 +1,9 @@
 from django.urls import path
-from .views import create_ticket, list_tickets, delete_ticket
+from .views import create_ticket, list_tickets, delete_ticket ,set_ticket_priority
 from . import views
 from . import views_workflow
 
-from .views import ticket_action
+# from .views import ticket_action 
 
 urlpatterns = [
     # Ticket APIs
@@ -37,4 +37,8 @@ urlpatterns = [
 
     #Action on ticket Approve | Reject
     path('action/<int:ticket_id>/', views.ticket_action, name='ticket_action'),
+
+
+     # ✅ NEW — Set / update ticket priority (approvers only)
+    path("priority/<int:ticket_id>/",    set_ticket_priority,  name="set_ticket_priority"),
 ]

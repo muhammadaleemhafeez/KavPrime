@@ -3,22 +3,17 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 
-
-
 from users.models import Role
 
 
 class Workflow(models.Model):
 
-    # repair/new_item/general or DEFAULT
-    ticket_type = models.CharField(max_length=50, default="DEFAULT")  
-    version = models.PositiveIntegerField(default=1)
-    is_active = models.BooleanField(default=False)
-
+    ticket_type   = models.CharField(max_length=50, default="DEFAULT")
+    version       = models.PositiveIntegerField(default=1)
+    is_active     = models.BooleanField(default=False)
     workflow_name = models.CharField(max_length=150, blank=True, null=True)
-    description = models.TextField(blank=True, null=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
+    description   = models.TextField(blank=True, null=True)
+    created_at    = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("ticket_type", "version")
@@ -26,30 +21,11 @@ class Workflow(models.Model):
     def __str__(self):
         return f"{self.ticket_type} v{self.version} {'(ACTIVE)' if self.is_active else ''}"
 
-# class WorkflowStep(models.Model):
-#     workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
-#     step_order = models.PositiveIntegerField()
-#     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="main_steps")
-#     target_role = models.ForeignKey(
-#         Role,
-#         on_delete=models.PROTECT,
-#         related_name="target_steps",
-#         null=True,  # temporarily allow NULL
-#         blank=True
-#     )
-#     sla_hours = models.PositiveIntegerField(default=4)
-
-#     class Meta:
-#         unique_together = ("workflow", "step_order")
-#         ordering = ["step_order"]
-
-#     def __str__(self):
-#         return f"{self.workflow} | Step {self.step_order}: {self.role.name} -> {self.target_role.name if self.target_role else 'N/A'} (SLA {self.sla_hours}h)"
 
 class WorkflowStep(models.Model):
-    workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
-    step_order = models.PositiveIntegerField()  # step number per role
-    role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="main_steps")
+    workflow   = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
+    step_order = models.PositiveIntegerField()
+    role       = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="main_steps")
     target_role = models.ForeignKey(
         Role,
         on_delete=models.PROTECT,
@@ -60,42 +36,54 @@ class WorkflowStep(models.Model):
     sla_hours = models.PositiveIntegerField(default=4)
 
     class Meta:
-        unique_together = ("workflow", "role", "step_order")  # ✅ per-role uniqueness
-        ordering = ["role", "step_order"]
+        unique_together = ("workflow", "role", "step_order")
+        ordering        = ["role", "step_order"]
 
     def __str__(self):
-        return f"{self.workflow} | Step {self.step_order}: {self.role.name} -> {self.target_role.name if self.target_role else 'N/A'} (SLA {self.sla_hours}h)"
+        return (
+            f"{self.workflow} | Step {self.step_order}: "
+            f"{self.role.name} -> {self.target_role.name if self.target_role else 'N/A'} "
+            f"(SLA {self.sla_hours}h)"
+        )
 
 
 class Ticket(models.Model):
+
     TICKET_TYPES = [
-        ("repair", "Repair an item"),
+        ("repair",   "Repair an item"),
         ("new_item", "Request a new item"),
-        ("general", "Report a general issue"),
+        ("general",  "Report a general issue"),
     ]
 
     STATUS_CHOICES = [
-        ("PENDING_TEAM_PMO", "Pending Team PMO"),
+        ("PENDING_TEAM_PMO",   "Pending Team PMO"),
         ("PENDING_SENIOR_PMO", "Pending Senior PMO"),
-        ("PENDING_ADMIN", "Pending Admin"),
-        ("REJECTED", "Rejected"),
-        ("APPROVED", "Approved"),
-        ("COMPLETED", "Completed"),
+        ("PENDING_ADMIN",      "Pending Admin"),
+        ("REJECTED",           "Rejected"),
+        ("APPROVED",           "Approved"),
+        ("COMPLETED",          "Completed"),
     ]
 
-    # Foreign Key to the employee (User model)
+    # ✅ NEW — priority choices
+    PRIORITY_CHOICES = [
+        ("CRITICAL",     "Critical"),
+        ("NON_CRITICAL", "Non Critical"),
+    ]
+
+    # ─────────────────────────────────────────
+    # CORE FIELDS
+    # ─────────────────────────────────────────
+
     employee = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="tickets",
     )
 
-    # Ticket fields
     ticket_type = models.CharField(max_length=20, choices=TICKET_TYPES)
-    title = models.CharField(max_length=200)
+    title       = models.CharField(max_length=200)
     description = models.TextField()
 
-    # ✅ Ticket status
     status = models.CharField(
         max_length=30,
         choices=STATUS_CHOICES,
@@ -103,36 +91,58 @@ class Ticket(models.Model):
         db_index=True,
     )
 
-    # Deadlines and role-related fields
-    team_pmo_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
-    created_by_role = models.CharField(max_length=30, blank=True)
+    # ✅ NEW — priority field
+    # null = not yet assessed by any approver
+    # Any approver at any step can set or update this
+    priority = models.CharField(
+        max_length=20,
+        choices=PRIORITY_CHOICES,
+        null=True,
+        blank=True,
+        default=None,
+        db_index=True,
+    )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # ✅ NEW — audit: who set the priority and when
+    priority_set_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="priority_set_tickets",
+    )
+    priority_set_at = models.DateTimeField(null=True, blank=True)
 
+    # ─────────────────────────────────────────
+    # WORKFLOW FIELDS
+    # ─────────────────────────────────────────
+
+    team_pmo_deadline   = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by_role     = models.CharField(max_length=30, blank=True)
+    created_at          = models.DateTimeField(auto_now_add=True)
+    updated_at          = models.DateTimeField(auto_now=True)
     escalation_deadline = models.DateTimeField(null=True, blank=True)
 
-    # ✅ # New: Assigned user
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,  # Set to null if the assigned user is deleted
-        related_name="assigned_tickets",  # A reverse relation from the User model
+        on_delete=models.SET_NULL,
+        related_name="assigned_tickets",
         null=True,
         blank=True,
     )
 
-    # ✅ NEW (dynamic workflow fields - safe)
-    workflow = models.ForeignKey(Workflow, on_delete=models.PROTECT, null=True, blank=True)
-    current_step = models.PositiveIntegerField(default=0)  # 0 means "not using workflow yet"
+    workflow     = models.ForeignKey(Workflow, on_delete=models.PROTECT, null=True, blank=True)
+    current_step = models.PositiveIntegerField(default=0)
     step_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
-    current_role = models.CharField(max_length=50, null=True, blank=True)
+    current_role  = models.CharField(max_length=50, null=True, blank=True)
 
     class Meta:
         db_table = "tickets_ticket"
-        indexes = [
+        indexes  = [
             models.Index(fields=["status", "team_pmo_deadline"]),
             models.Index(fields=["employee"]),
             models.Index(fields=["step_deadline"]),
+            models.Index(fields=["priority"]),   # ✅ index for priority filtering
         ]
 
     def __str__(self):
@@ -141,11 +151,11 @@ class Ticket(models.Model):
 
 class AssignedTicket(models.Model):
     ACTION_STATUS = [
-        ("ASSIGNED", "Assigned"),
-        ("APPROVED", "Approved"),
-        ("REJECTED", "Rejected"),
-        ("ESCALATED", "Escalated"),
-        ("COMPLETED", "Completed"),
+        ("ASSIGNED",       "Assigned"),
+        ("APPROVED",       "Approved"),
+        ("REJECTED",       "Rejected"),
+        ("ESCALATED",      "Escalated"),
+        ("COMPLETED",      "Completed"),
         ("STATUS_UPDATED", "Status Updated"),
         ("AUTO_ESCALATED", "Auto Escalated"),
     ]
@@ -164,15 +174,14 @@ class AssignedTicket(models.Model):
         db_index=True,
     )
 
-    role = models.CharField(max_length=30)  # store role name text (safe)
-    status = models.CharField(max_length=20, choices=ACTION_STATUS, default="ASSIGNED", db_index=True)
-
-    remarks = models.TextField(blank=True)
+    role        = models.CharField(max_length=30)
+    status      = models.CharField(max_length=20, choices=ACTION_STATUS, default="ASSIGNED", db_index=True)
+    remarks     = models.TextField(blank=True)
     action_date = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
         db_table = "assigned_tickets"
-        indexes = [
+        indexes  = [
             models.Index(fields=["ticket", "action_date"]),
             models.Index(fields=["assigned_to", "action_date"]),
         ]
