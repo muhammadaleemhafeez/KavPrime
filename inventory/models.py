@@ -122,7 +122,14 @@ class Asset(models.Model):
 
     purchase_date = models.DateField()
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
-    vendor_name = models.CharField(max_length=150)
+    # vendor_name = models.CharField(max_length=150)
+    vendor = models.ForeignKey(
+        'Vendor',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assets"
+)
     invoice_number = models.CharField(max_length=100, null=True, blank=True)
 
     warranty_start = models.DateField(null=True, blank=True)
@@ -224,8 +231,10 @@ class AssetDetails(models.Model):
     )
 
     quantity_issued = models.PositiveIntegerField(default=1)
+    issue_date = models.DateTimeField(null=True, blank=True)
+    location = models.CharField(max_length=255, null=True, blank=True)
+    issue_reason = models.TextField(null=True, blank=True)
 
-    # issued_date = models.DateTimeField(auto_now_add=True)
 
     return_date = models.DateTimeField(
         null=True,

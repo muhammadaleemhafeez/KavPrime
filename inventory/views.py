@@ -249,13 +249,23 @@ def issue_inventory(request):
 
     try:
         data = json.loads(request.body)
+
         asset_id = data.get("asset_id")
         employee_id = data.get("employee_id")
         issued_by_id = data.get("issued_by_id")
         quantity_issued = int(data.get("quantity_issued", 0))
 
-        if not all([asset_id, employee_id, issued_by_id, quantity_issued]):
-            return JsonResponse({"error": "asset_id, employee_id, issued_by_id, quantity_issued are required"}, status=400)
+        issue_date = data.get("issue_date")
+        location = data.get("location")
+        issue_reason = data.get("issue_reason")
+        remarks = data.get("remarks")
+
+        # validation
+        if not all([asset_id, employee_id, issued_by_id, quantity_issued, issue_date, location, issue_reason]):
+            return JsonResponse({
+                "error": "asset_id, employee_id, issued_by_id, quantity_issued, issue_date, location, issue_reason are required"
+            }, status=400)
+
         if quantity_issued <= 0:
             return JsonResponse({"error": "quantity_issued must be > 0"}, status=400)
 
@@ -267,14 +277,16 @@ def issue_inventory(request):
             return JsonResponse({"error": "Not enough stock available"}, status=400)
 
         # Update stock
-        asset.available_quantity -= quantity_issued
-        asset.issued_quantity += quantity_issued
+        # asset.available_quantity -= quantity_issued
+        # asset.issued_quantity += quantity_issued
+
         if asset.available_quantity == 0:
             asset.status = "OUT_OF_STOCK"
         elif asset.available_quantity <= asset.minimum_stock_level:
             asset.status = "LOW_STOCK"
         else:
             asset.status = "AVAILABLE"
+
         asset.save()
 
         # Create issue record
@@ -283,22 +295,33 @@ def issue_inventory(request):
             user=employee,
             quantity_issued=quantity_issued,
             issued_by=issued_by,
+            issue_date=issue_date,
+            location=location,
+            issue_reason=issue_reason,
+            remarks=remarks,
             status="ISSUED"
         )
 
         return JsonResponse({
             "message": "Asset issued successfully",
-            "asset_detail_id": asset_detail.id,
-            "remaining_quantity": asset.available_quantity
+            "asset_id": asset.id,
+            "employee_id": employee.id,
+            "issued_by": issued_by.id,
+            "quantity_issued": asset_detail.quantity_issued,
+            "issue_date": asset_detail.issue_date,
+            "location": asset_detail.location,
+            "issue_reason": asset_detail.issue_reason,
+            "remarks": asset_detail.remarks,
         }, status=201)
 
     except Asset.DoesNotExist:
         return JsonResponse({"error": "Asset not found"}, status=404)
+
     except User.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
+
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
-    
+        return JsonResponse({"error": str(e)}, status=500)    
 
 # Add to your existing inventory/views.py
 
@@ -308,7 +331,7 @@ def list_assets(request):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
     
-    assets = AssetDetails.objects.select_related('inventory', 'user', 'issued_by').all()
+    assets = AssetDetails.objects.select_related('asset', 'user', 'issued_by').all()
     
     assets_list = []
     for asset in assets:
@@ -444,7 +467,7 @@ def get_asset_detail(request, asset_id):
         return JsonResponse({"error": "GET method required"}, status=405)
     
     try:
-        asset = AssetDetails.objects.select_related('inventory', 'user', 'issued_by').get(id=asset_id)
+        asset = AssetDetails.objects.select_related('asset', 'user', 'issued_by').get(id=asset_id)
     except AssetDetails.DoesNotExist:
         return JsonResponse({"error": "Asset not found"}, status=404)
     
