@@ -1,12 +1,11 @@
+# reports/views.py
 import csv
-import json
 from io import StringIO
 
 from django.http import JsonResponse, HttpResponse
-from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
-from django.db.models import Count, Sum, Q, Avg
+from django.db.models import Count, Sum, Q
 from django.db.models.functions import TruncMonth, TruncDate
 
 from inventory.models import Asset, AssetDetails, PurchaseRequest, Vendor
@@ -20,7 +19,7 @@ from users.models import User
 
 def _date_filters(request):
     from_date = request.GET.get("from_date")
-    to_date = request.GET.get("to_date")
+    to_date   = request.GET.get("to_date")
     return from_date, to_date
 
 
@@ -33,7 +32,6 @@ def _apply_date_range(qs, field, from_date, to_date):
 
 
 def _wants_csv(request):
-    """Return True if client requests CSV via ?format=csv or Accept: text/csv header."""
     return (
         request.GET.get("format", "").lower() == "csv"
         or "text/csv" in request.META.get("HTTP_ACCEPT", "")
@@ -41,12 +39,6 @@ def _wants_csv(request):
 
 
 def _csv_response(filename, headers, rows):
-    """
-    Build a downloadable CSV HttpResponse.
-    :param filename: base filename without extension
-    :param headers:  list of column header strings
-    :param rows:     list of dicts — keys must match headers
-    """
     response = HttpResponse(content_type="text/csv")
     response["Content-Disposition"] = (
         f'attachment; filename="{filename}_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv"'
@@ -55,6 +47,37 @@ def _csv_response(filename, headers, rows):
     writer.writeheader()
     writer.writerows(rows)
     return response
+
+
+def _paginate(request, data):
+    """
+    Pagination helper.
+    Query params: ?page=1&limit=10
+    - page  starts at 1 (default: 1)
+    - limit default: 10
+    CSV requests skip pagination and return all rows.
+    """
+    try:
+        page  = max(1, int(request.GET.get("page",  1)))
+        limit = max(1, int(request.GET.get("limit", 10)))
+    except (ValueError, TypeError):
+        page  = 1
+        limit = 10
+
+    total       = len(data)
+    start       = (page - 1) * limit
+    end         = start + limit
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    return {
+        "page":        page,
+        "limit":       limit,
+        "total":       total,
+        "total_pages": total_pages,
+        "has_next":    page < total_pages,
+        "has_prev":    page > 1,
+        "data":        data[start:end],
+    }
 
 
 # ============================================================
@@ -74,26 +97,26 @@ def report_asset_summary(request):
     if _wants_csv(request):
         rows = []
         for r in by_status:
-            rows.append({"group": "by_status", "key": r["status"], "count": r["count"]})
+            rows.append({"group": "by_status",          "key": r["status"],          "count": r["count"]})
         for r in by_category:
-            rows.append({"group": "by_category", "key": r["category"], "count": r["count"]})
+            rows.append({"group": "by_category",        "key": r["category"],        "count": r["count"]})
         for r in by_condition:
-            rows.append({"group": "by_condition", "key": r["condition"], "count": r["count"]})
+            rows.append({"group": "by_condition",       "key": r["condition"],       "count": r["count"]})
         for r in by_warranty:
             rows.append({"group": "by_warranty_status", "key": r["warranty_status"], "count": r["count"]})
         rows.append({"group": "TOTAL_ASSETS",         "key": "total",       "count": assets.count()})
-        rows.append({"group": "TOTAL_PURCHASE_VALUE",  "key": "total_value", "count": float(total_value)})
+        rows.append({"group": "TOTAL_PURCHASE_VALUE", "key": "total_value", "count": float(total_value)})
         return _csv_response("asset_summary", ["group", "key", "count"], rows)
 
     return JsonResponse({
-        "report": "Asset Summary",
-        "generated_at": timezone.now().isoformat(),
-        "total_assets": assets.count(),
+        "report":               "Asset Summary",
+        "generated_at":         timezone.now().isoformat(),
+        "total_assets":         assets.count(),
         "total_purchase_value": float(total_value),
-        "by_status": by_status,
-        "by_category": by_category,
-        "by_condition": by_condition,
-        "by_warranty_status": by_warranty,
+        "by_status":            by_status,
+        "by_category":          by_category,
+        "by_condition":         by_condition,
+        "by_warranty_status":   by_warranty,
     })
 
 
@@ -104,7 +127,8 @@ def report_asset_full_list(request):
     status    = request.GET.get("status")
     condition = request.GET.get("condition")
 
-    assets = Asset.objects.select_related("assigned_to").all()
+    # ✅ FIX: added "vendor" to select_related
+    assets = Asset.objects.select_related("assigned_to", "vendor").all()
     if category:
         assets = assets.filter(category__iexact=category)
     if status:
@@ -128,7 +152,7 @@ def report_asset_full_list(request):
             "issued_quantity":    a.issued_quantity,
             "purchase_date":      a.purchase_date.isoformat() if a.purchase_date else "",
             "purchase_price":     float(a.purchase_price) if a.purchase_price else "",
-            "vendor_name":        a.vendor_name,
+            "vendor_name":        a.vendor.name if a.vendor else "",   # ✅ FIX
             "warranty_status":    a.warranty_status,
             "warranty_end":       a.warranty_end.isoformat() if a.warranty_end else "",
             "assigned_to":        a.assigned_to.name if a.assigned_to else "",
@@ -144,12 +168,18 @@ def report_asset_full_list(request):
         ]
         return _csv_response("asset_full_list", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Full Asset List",
+        "report":       "Full Asset List",
         "generated_at": timezone.now().isoformat(),
-        "filters": {"category": category, "status": status, "condition": condition},
-        "total": len(rows),
-        "assets": rows,
+        "filters":      {"category": category, "status": status, "condition": condition},
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "assets":       paginated["data"],
     })
 
 
@@ -197,11 +227,17 @@ def report_asset_issue_return_history(request):
         ]
         return _csv_response("asset_issue_return_history", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Asset Issue / Return History",
+        "report":       "Asset Issue / Return History",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "records": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "records":      paginated["data"],
     })
 
 
@@ -235,17 +271,23 @@ def report_currently_issued_assets(request):
         ]
         return _csv_response("currently_issued_assets", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Currently Issued Assets",
+        "report":       "Currently Issued Assets",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "records": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "records":      paginated["data"],
     })
 
 
 @require_http_methods(["GET"])
 def report_low_stock_assets(request):
-    assets = Asset.objects.filter(status__in=["LOW_STOCK", "OUT_OF_STOCK"])
+    assets = Asset.objects.select_related("vendor").filter(status__in=["LOW_STOCK", "OUT_OF_STOCK"])
 
     rows = []
     for a in assets:
@@ -259,7 +301,7 @@ def report_low_stock_assets(request):
             "total_quantity":      a.total_quantity,
             "available_quantity":  a.available_quantity,
             "minimum_stock_level": a.minimum_stock_level,
-            "vendor_name":         a.vendor_name,
+            "vendor_name":         a.vendor.name if a.vendor else "",
         })
 
     if _wants_csv(request):
@@ -269,11 +311,17 @@ def report_low_stock_assets(request):
         ]
         return _csv_response("low_stock_assets", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Low Stock / Out of Stock Assets",
+        "report":       "Low Stock / Out of Stock Assets",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "assets": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "assets":       paginated["data"],
     })
 
 
@@ -283,7 +331,7 @@ def report_warranty_expiry(request):
     today = timezone.now().date()
     days  = int(request.GET.get("days", 0))
 
-    assets = Asset.objects.exclude(warranty_end__isnull=True)
+    assets = Asset.objects.select_related("vendor").exclude(warranty_end__isnull=True)
     if days:
         threshold = today + timedelta(days=days)
         assets = assets.filter(warranty_end__lte=threshold)
@@ -301,7 +349,7 @@ def report_warranty_expiry(request):
             "warranty_end":      a.warranty_end.isoformat(),
             "warranty_status":   a.warranty_status,
             "days_until_expiry": (a.warranty_end - today).days,
-            "vendor_name":       a.vendor_name,
+            "vendor_name":       a.vendor.name if a.vendor else "",
         })
 
     if _wants_csv(request):
@@ -311,12 +359,18 @@ def report_warranty_expiry(request):
         ]
         return _csv_response("warranty_expiry", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Warranty Expiry Report",
+        "report":       "Warranty Expiry Report",
         "generated_at": timezone.now().isoformat(),
-        "filter_days": days or "expired only",
-        "total": len(rows),
-        "assets": rows,
+        "filter_days":  days or "expired only",
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "assets":       paginated["data"],
     })
 
 
@@ -341,25 +395,25 @@ def report_ticket_summary(request):
     if _wants_csv(request):
         rows = []
         for r in by_status:
-            rows.append({"group": "by_status", "key": r["status"], "count": r["count"]})
+            rows.append({"group": "by_status",          "key": r["status"],          "count": r["count"]})
         for r in by_type:
-            rows.append({"group": "by_ticket_type", "key": r["ticket_type"], "count": r["count"]})
+            rows.append({"group": "by_ticket_type",     "key": r["ticket_type"],     "count": r["count"]})
         for r in by_role:
             rows.append({"group": "by_created_by_role", "key": r["created_by_role"], "count": r["count"]})
         for r in by_current_role:
-            rows.append({"group": "pending_by_role", "key": r["current_role"], "count": r["count"]})
+            rows.append({"group": "pending_by_role",    "key": r["current_role"],    "count": r["count"]})
         rows.append({"group": "TOTAL", "key": "total_tickets", "count": tickets.count()})
         return _csv_response("ticket_summary", ["group", "key", "count"], rows)
 
     return JsonResponse({
-        "report": "Ticket Summary",
-        "generated_at": timezone.now().isoformat(),
-        "date_range": {"from": from_date, "to": to_date},
-        "total_tickets": tickets.count(),
-        "by_status": by_status,
-        "by_ticket_type": by_type,
+        "report":             "Ticket Summary",
+        "generated_at":       timezone.now().isoformat(),
+        "date_range":         {"from": from_date, "to": to_date},
+        "total_tickets":      tickets.count(),
+        "by_status":          by_status,
+        "by_ticket_type":     by_type,
         "by_created_by_role": by_role,
-        "pending_by_role": by_current_role,
+        "pending_by_role":    by_current_role,
     })
 
 
@@ -386,6 +440,7 @@ def report_ticket_full_list(request):
             "title":           t.title,
             "ticket_type":     t.ticket_type,
             "status":          t.status,
+            "priority":        t.priority or "",
             "created_by_role": t.created_by_role,
             "current_role":    t.current_role or "",
             "current_step":    t.current_step,
@@ -400,17 +455,23 @@ def report_ticket_full_list(request):
 
     if _wants_csv(request):
         headers = [
-            "ticket_id","title","ticket_type","status","created_by_role",
+            "ticket_id","title","ticket_type","status","priority","created_by_role",
             "current_role","current_step","employee_id","employee_name",
             "employee_email","assigned_to","workflow_id","created_at","updated_at",
         ]
         return _csv_response("ticket_full_list", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Full Ticket List",
+        "report":       "Full Ticket List",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "tickets": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "tickets":      paginated["data"],
     })
 
 
@@ -453,11 +514,17 @@ def report_ticket_approval_history(request):
         ]
         return _csv_response("ticket_approval_history", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Ticket Approval / Rejection History",
+        "report":       "Ticket Approval / Rejection History",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "history": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "history":      paginated["data"],
     })
 
 
@@ -476,6 +543,7 @@ def report_sla_breach(request):
             "title":            t.title,
             "ticket_type":      t.ticket_type,
             "status":           t.status,
+            "priority":         t.priority or "",
             "current_role":     t.current_role or "",
             "step_deadline":    t.step_deadline.isoformat(),
             "overdue_by_hours": overdue_hours,
@@ -487,17 +555,23 @@ def report_sla_breach(request):
 
     if _wants_csv(request):
         headers = [
-            "ticket_id","title","ticket_type","status","current_role",
+            "ticket_id","title","ticket_type","status","priority","current_role",
             "step_deadline","overdue_by_hours","employee_id","employee_name",
             "assigned_to","created_at",
         ]
         return _csv_response("sla_breach", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "SLA Breach Report",
-        "generated_at": timezone.now().isoformat(),
-        "total_breached": len(rows),
-        "tickets": rows,
+        "report":         "SLA Breach Report",
+        "generated_at":   timezone.now().isoformat(),
+        "total_breached": paginated["total"],
+        "total_pages":    paginated["total_pages"],
+        "page":           paginated["page"],
+        "limit":          paginated["limit"],
+        "has_next":       paginated["has_next"],
+        "has_prev":       paginated["has_prev"],
+        "tickets":        paginated["data"],
     })
 
 
@@ -514,8 +588,8 @@ def report_pending_tickets_by_role(request):
         return _csv_response("pending_tickets_by_role", ["current_role", "pending_count"], rows)
 
     return JsonResponse({
-        "report": "Pending Tickets by Role",
-        "generated_at": timezone.now().isoformat(),
+        "report":          "Pending Tickets by Role",
+        "generated_at":    timezone.now().isoformat(),
         "pending_by_role": pending,
     })
 
@@ -535,7 +609,7 @@ def report_user_summary(request):
     if _wants_csv(request):
         rows = []
         for r in by_role:
-            rows.append({"group": "by_role", "key": r["role"], "count": r["count"]})
+            rows.append({"group": "by_role",              "key": r["role"],              "count": r["count"]})
         for r in by_status:
             rows.append({"group": "by_employment_status", "key": r["employment_status"], "count": r["count"]})
         rows.append({"group": "TOTAL", "key": "total_users",       "count": users.count()})
@@ -544,12 +618,12 @@ def report_user_summary(request):
         return _csv_response("user_summary", ["group", "key", "count"], rows)
 
     return JsonResponse({
-        "report": "User Summary",
-        "generated_at": timezone.now().isoformat(),
-        "total_users": users.count(),
-        "active_accounts": active,
-        "inactive_accounts": inactive,
-        "by_role": by_role,
+        "report":               "User Summary",
+        "generated_at":         timezone.now().isoformat(),
+        "total_users":          users.count(),
+        "active_accounts":      active,
+        "inactive_accounts":    inactive,
+        "by_role":              by_role,
         "by_employment_status": by_status,
     })
 
@@ -603,18 +677,24 @@ def report_employee_asset_history(request, employee_id):
         ]
         return _csv_response(f"employee_{employee_id}_asset_history", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Employee Asset History",
-        "generated_at": timezone.now().isoformat(),
-        "employee_id": employee.id,
-        "employee_name": employee.name,
-        "employee_email": employee.email,
-        "role": employee.role,
-        "employment_status": employee.employment_status,
-        "join_date": employee.join_date.isoformat() if employee.join_date else None,
-        "exit_date": employee.exit_date.isoformat() if employee.exit_date else None,
-        "issue_return_history": rows,
-        "total_history_records": len(rows),
+        "report":               "Employee Asset History",
+        "generated_at":         timezone.now().isoformat(),
+        "employee_id":          employee.id,
+        "employee_name":        employee.name,
+        "employee_email":       employee.email,
+        "role":                 employee.role,
+        "employment_status":    employee.employment_status,
+        "join_date":            employee.join_date.isoformat() if employee.join_date else None,
+        "exit_date":            employee.exit_date.isoformat() if employee.exit_date else None,
+        "total":                paginated["total"],
+        "total_pages":          paginated["total_pages"],
+        "page":                 paginated["page"],
+        "limit":                paginated["limit"],
+        "has_next":             paginated["has_next"],
+        "has_prev":             paginated["has_prev"],
+        "issue_return_history": paginated["data"],
     })
 
 
@@ -632,49 +712,53 @@ def report_offboarding_checklist(request, employee_id):
     rows = []
     for r in open_issue_records:
         rows.append({
-            "type": "UNRETURNED_ASSET", "id": r.id,
-            "asset_tag": r.asset.asset_tag if r.asset else "",
-            "category":  r.asset.category if r.asset else "",
+            "type":            "UNRETURNED_ASSET",
+            "id":              r.id,
+            "asset_tag":       r.asset.asset_tag if r.asset else "",
+            "category":        r.asset.category if r.asset else "",
             "quantity_issued": r.quantity_issued,
-            "detail": r.created_at.isoformat(),
+            "detail":          r.created_at.isoformat(),
         })
     for a in directly_assigned:
         rows.append({
-            "type": "DIRECTLY_ASSIGNED", "id": a.id,
-            "asset_tag": a.asset_tag, "category": a.category,
-            "quantity_issued": "", "detail": "",
+            "type":            "DIRECTLY_ASSIGNED",
+            "id":              a.id,
+            "asset_tag":       a.asset_tag,
+            "category":        a.category,
+            "quantity_issued": "",
+            "detail":          "",
         })
     for t in open_tickets:
         rows.append({
-            "type": "OPEN_TICKET", "id": t.id,
-            "asset_tag": "", "category": t.ticket_type,
-            "quantity_issued": "", "detail": t.title,
+            "type":            "OPEN_TICKET",
+            "id":              t.id,
+            "asset_tag":       "",
+            "category":        t.ticket_type,
+            "quantity_issued": "",
+            "detail":          t.title,
         })
 
     is_clear = len(rows) == 0
 
     if _wants_csv(request):
-        summary_row = [{
-            "type": f"OFFBOARDING_CLEAR={is_clear}", "id": "",
-            "asset_tag": "", "category": "", "quantity_issued": "", "detail": ""
-        }]
+        summary_row = [{"type": f"OFFBOARDING_CLEAR={is_clear}", "id": "", "asset_tag": "", "category": "", "quantity_issued": "", "detail": ""}]
         headers = ["type","id","asset_tag","category","quantity_issued","detail"]
         return _csv_response(f"offboarding_checklist_employee_{employee_id}", headers, summary_row + rows)
 
     return JsonResponse({
-        "report": "Offboarding Checklist",
-        "generated_at": timezone.now().isoformat(),
-        "employee_id": employee.id,
-        "employee_name": employee.name,
+        "report":            "Offboarding Checklist",
+        "generated_at":      timezone.now().isoformat(),
+        "employee_id":       employee.id,
+        "employee_name":     employee.name,
         "employment_status": employee.employment_status,
         "offboarding_clear": is_clear,
         "unreturned_issued_assets": [r for r in rows if r["type"] == "UNRETURNED_ASSET"],
         "directly_assigned_assets": [r for r in rows if r["type"] == "DIRECTLY_ASSIGNED"],
-        "open_tickets": [r for r in rows if r["type"] == "OPEN_TICKET"],
+        "open_tickets":             [r for r in rows if r["type"] == "OPEN_TICKET"],
         "summary": {
             "unreturned_asset_records": open_issue_records.count(),
             "directly_assigned_assets": directly_assigned.count(),
-            "open_tickets": open_tickets.count(),
+            "open_tickets":             open_tickets.count(),
         }
     })
 
@@ -699,11 +783,17 @@ def report_exited_employees(request):
         headers = ["employee_id","name","email","role","join_date","exit_date","is_active"]
         return _csv_response("exited_employees", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Exited Employees",
+        "report":       "Exited Employees",
         "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "employees": rows,
+        "total":        paginated["total"],
+        "total_pages":  paginated["total_pages"],
+        "page":         paginated["page"],
+        "limit":        paginated["limit"],
+        "has_next":     paginated["has_next"],
+        "has_prev":     paginated["has_prev"],
+        "employees":    paginated["data"],
     })
 
 
@@ -724,7 +814,7 @@ def report_purchase_summary(request):
     if _wants_csv(request):
         rows = []
         for r in by_status:
-            rows.append({"group": "by_status", "key": r["status"], "count": r["count"]})
+            rows.append({"group": "by_status",       "key": r["status"],       "count": r["count"]})
         for r in by_type:
             rows.append({"group": "by_request_type", "key": r["request_type"], "count": r["count"]})
         for r in by_triggered:
@@ -733,11 +823,11 @@ def report_purchase_summary(request):
         return _csv_response("purchase_summary", ["group", "key", "count"], rows)
 
     return JsonResponse({
-        "report": "Purchase Request Summary",
-        "generated_at": timezone.now().isoformat(),
-        "date_range": {"from": from_date, "to": to_date},
-        "total_requests": prs.count(),
-        "by_status": by_status,
+        "report":          "Purchase Request Summary",
+        "generated_at":    timezone.now().isoformat(),
+        "date_range":      {"from": from_date, "to": to_date},
+        "total_requests":  prs.count(),
+        "by_status":       by_status,
         "by_request_type": by_type,
         "by_triggered_by": by_triggered,
     })
@@ -780,11 +870,17 @@ def report_purchase_full_list(request):
         ]
         return _csv_response("purchase_full_list", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Full Purchase Request List",
-        "generated_at": timezone.now().isoformat(),
-        "total": len(rows),
-        "purchase_requests": rows,
+        "report":            "Full Purchase Request List",
+        "generated_at":      timezone.now().isoformat(),
+        "total":              paginated["total"],
+        "total_pages":        paginated["total_pages"],
+        "page":               paginated["page"],
+        "limit":              paginated["limit"],
+        "has_next":           paginated["has_next"],
+        "has_prev":           paginated["has_prev"],
+        "purchase_requests":  paginated["data"],
     })
 
 
@@ -794,9 +890,9 @@ def report_vendor_summary(request):
 
     rows = []
     for v in vendors:
-        asset_count = Asset.objects.filter(vendor_name__iexact=v.name).count()
+        asset_count = Asset.objects.filter(vendor=v).count()
         total_spend = Asset.objects.filter(
-            vendor_name__iexact=v.name
+            vendor=v
         ).aggregate(total=Sum("purchase_price"))["total"] or 0
 
         rows.append({
@@ -817,11 +913,17 @@ def report_vendor_summary(request):
         ]
         return _csv_response("vendor_summary", headers, rows)
 
+    paginated = _paginate(request, rows)
     return JsonResponse({
-        "report": "Vendor Summary",
-        "generated_at": timezone.now().isoformat(),
-        "total_vendors": len(rows),
-        "vendors": rows,
+        "report":        "Vendor Summary",
+        "generated_at":  timezone.now().isoformat(),
+        "total_vendors":  paginated["total"],
+        "total_pages":   paginated["total_pages"],
+        "page":          paginated["page"],
+        "limit":         paginated["limit"],
+        "has_next":      paginated["has_next"],
+        "has_prev":      paginated["has_prev"],
+        "vendors":       paginated["data"],
     })
 
 
@@ -875,12 +977,18 @@ def report_audit_log(request):
         ]
         return _csv_response("master_audit_log", headers, events)
 
+    paginated = _paginate(request, events)
     return JsonResponse({
-        "report": "Master Audit Log",
+        "report":       "Master Audit Log",
         "generated_at": timezone.now().isoformat(),
-        "date_range": {"from": from_date, "to": to_date},
-        "total_events": len(events),
-        "events": events,
+        "date_range":   {"from": from_date, "to": to_date},
+        "total_events":  paginated["total"],
+        "total_pages":   paginated["total_pages"],
+        "page":          paginated["page"],
+        "limit":         paginated["limit"],
+        "has_next":      paginated["has_next"],
+        "has_prev":      paginated["has_prev"],
+        "events":        paginated["data"],
     })
 
 
@@ -901,7 +1009,9 @@ def report_dashboard_stats(request):
     open_tickets  = Ticket.objects.exclude(status__in=["COMPLETED", "REJECTED"]).count()
     completed     = Ticket.objects.filter(status="COMPLETED").count()
     rejected      = Ticket.objects.filter(status="REJECTED").count()
-    sla_breached  = Ticket.objects.filter(step_deadline__lt=now).exclude(status__in=["COMPLETED", "REJECTED"]).count()
+    sla_breached  = Ticket.objects.filter(
+        step_deadline__lt=now
+    ).exclude(status__in=["COMPLETED", "REJECTED"]).count()
 
     total_users  = User.objects.count()
     active_users = User.objects.filter(is_active=True, employment_status="ACTIVE").count()
@@ -934,10 +1044,10 @@ def report_dashboard_stats(request):
         return _csv_response("dashboard_stats", ["section", "metric", "value"], rows)
 
     return JsonResponse({
-        "report": "Dashboard Stats",
+        "report":       "Dashboard Stats",
         "generated_at": now.isoformat(),
-        "assets":    {"total": total_assets, "available": available_assets, "issued": issued_assets, "low_or_out_of_stock": low_stock},
-        "tickets":   {"total": total_tickets, "open": open_tickets, "completed": completed, "rejected": rejected, "sla_breached": sla_breached},
-        "users":     {"total": total_users, "active": active_users, "onboarding": onboarding, "offboarding": offboarding, "exited": exited},
+        "assets":    {"total": total_assets,   "available": available_assets,  "issued": issued_assets,   "low_or_out_of_stock": low_stock},
+        "tickets":   {"total": total_tickets,  "open": open_tickets,           "completed": completed,    "rejected": rejected, "sla_breached": sla_breached},
+        "users":     {"total": total_users,    "active": active_users,         "onboarding": onboarding,  "offboarding": offboarding, "exited": exited},
         "purchases": {"pending_approval": pending_purchases},
     })
