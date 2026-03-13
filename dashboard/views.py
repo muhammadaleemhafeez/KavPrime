@@ -6,6 +6,9 @@ from Tickets.models import Ticket
 from users.models import User
 from inventory.models import AssetDetails
 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
 
 # -----------------------------
 # Helper Function
@@ -29,6 +32,7 @@ def normalize_status(status):
 # Unified Dashboard View
 # -----------------------------
 @require_http_methods(["GET"])
+@jwt_required
 def dashboard_summary(request, employee_id=None, role_name=None):
     """
     Unified dashboard:

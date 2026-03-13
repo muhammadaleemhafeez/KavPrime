@@ -11,6 +11,9 @@ from django.contrib.auth import get_user_model
 from .models import Ticket, AssignedTicket, WorkflowStep
 from Tickets.models import Ticket, Workflow
 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
 from .email_utils import (
     send_ticket_created_email,
     send_ticket_approved_email,
@@ -41,22 +44,23 @@ def _apply_priority(ticket, priority, actioner_user):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@jwt_required
 def create_ticket(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    employee_id       = data.get("employee_id")
+    employee          = request.jwt_user  # ✅ Identified from JWT token
     ticket_type_input = (data.get("ticket_type") or "").strip()
     title             = data.get("title")
     description       = data.get("description")
     role_override     = data.get("role")
     role_email_map    = data.get("role_email_map", {})
 
-    if not employee_id or not ticket_type_input or not title or not description:
+    if not ticket_type_input or not title or not description:
         return JsonResponse(
-            {"error": "employee_id, ticket_type, title, description are required"},
+            {"error": "ticket_type, title, description are required"},
             status=400
         )
 
@@ -71,11 +75,6 @@ def create_ticket(request):
             "error": "Invalid ticket_type",
             "allowed_ticket_types": list(ticket_type_map.keys())
         }, status=400)
-
-    try:
-        employee = User.objects.get(id=employee_id)
-    except User.DoesNotExist:
-        return JsonResponse({"error": "Employee not found"}, status=404)
 
     employee_role_name = role_override or employee.role
     if not employee_role_name:
@@ -157,30 +156,26 @@ def create_ticket(request):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@jwt_required
 def set_ticket_priority(request, ticket_id):
     """
     PATCH /api/tickets/priority/<ticket_id>/
-    {
-        "priority":    "CRITICAL",
-        "actioner_id": 3
-    }
+    { "priority": "CRITICAL" }
+    Actioner is identified from the Bearer token.
     """
     try:
         data = json.loads(request.body.decode("utf-8"))
     except Exception:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    priority    = (data.get("priority") or "").strip().upper()
-    actioner_id = data.get("actioner_id")
+    priority = (data.get("priority") or "").strip().upper()
+    actioner = request.jwt_user  # ✅ Identified from JWT token
 
     if priority not in ["CRITICAL", "NON_CRITICAL"]:
         return JsonResponse(
             {"error": "priority must be CRITICAL or NON_CRITICAL"},
             status=400
         )
-
-    if not actioner_id:
-        return JsonResponse({"error": "actioner_id is required"}, status=400)
 
     try:
         ticket = Ticket.objects.select_related(
@@ -194,11 +189,6 @@ def set_ticket_priority(request, ticket_id):
             {"error": f"Cannot set priority on a {ticket.status} ticket"},
             status=400
         )
-
-    try:
-        actioner = User.objects.get(id=actioner_id)
-    except User.DoesNotExist:
-        return JsonResponse({"error": "Actioner user not found"}, status=404)
 
     # Ticket creator cannot set priority on their own ticket
     if actioner.id == ticket.employee_id:
@@ -235,12 +225,10 @@ def set_ticket_priority(request, ticket_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
+@jwt_required
 def list_tickets(request):
-    employee_id = request.GET.get("employee_id")
-    if not employee_id:
-        return JsonResponse(
-            {"error": "employee_id query parameter is required"}, status=400
-        )
+    # ✅ Employee is identified from JWT token; admins may optionally filter by ?employee_id=
+    employee_id = request.GET.get("employee_id") or request.jwt_user.id
 
     tickets = Ticket.objects.filter(employee_id=employee_id).values(
         "id", "employee_id", "ticket_type", "title", "description",
@@ -256,6 +244,7 @@ def list_tickets(request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
+@jwt_required
 def list_all_tickets(request):
     priority_filter = request.GET.get("priority")
     tickets = Ticket.objects.all()
@@ -277,6 +266,7 @@ def list_all_tickets(request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
+@jwt_required
 def ticket_history(request, ticket_id):
     try:
         t = Ticket.objects.select_related(
@@ -369,6 +359,7 @@ def ticket_history(request, ticket_id):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@jwt_required
 def ticket_action(request, ticket_id):
 
     try:
@@ -380,7 +371,7 @@ def ticket_action(request, ticket_id):
     remarks             = data.get("remarks", "")
     role_email_map      = data.get("role_email_map", {})
     ticket_creator_role = (data.get("role") or "").strip()
-    actioner_id         = data.get("actioner_id")
+    actioner_user       = request.jwt_user  # ✅ Identified from JWT token
     priority            = (data.get("priority") or "").strip().upper() or None
 
     if priority and priority not in ["CRITICAL", "NON_CRITICAL"]:
@@ -414,16 +405,7 @@ def ticket_action(request, ticket_id):
             status=403
         )
 
-    # Resolve actioner
-    actioner_user = None
-    if actioner_id:
-        try:
-            actioner_user = User.objects.get(id=actioner_id)
-        except User.DoesNotExist:
-            pass
-    if not actioner_user:
-        actioner_user = ticket.assigned_to or ticket.employee
-
+    # ✅ actioner_user already set from JWT token above
     # Apply priority if provided alongside the action
     if priority:
         _apply_priority(ticket, priority, actioner_user)
@@ -530,6 +512,7 @@ def ticket_action(request, ticket_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@jwt_required
 def delete_ticket(request, ticket_id):
     try:
         ticket = Ticket.objects.get(id=ticket_id)
@@ -561,7 +544,9 @@ def delete_ticket(request, ticket_id):
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
 def dashboard_tickets(request, user_id):
+    # ✅ JWT authenticates the request; user_id in URL allows admin to view any user's dashboard
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:

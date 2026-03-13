@@ -12,6 +12,9 @@ from inventory.models import Asset, AssetDetails, PurchaseRequest, Vendor
 from Tickets.models import Ticket, AssignedTicket, Workflow, WorkflowStep
 from users.models import User
 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
 
 # ============================================================
 # HELPER UTILITIES
@@ -85,6 +88,7 @@ def _paginate(request, data):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_asset_summary(request):
     assets = Asset.objects.all()
 
@@ -121,6 +125,7 @@ def report_asset_summary(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_asset_full_list(request):
     from_date, to_date = _date_filters(request)
     category  = request.GET.get("category")
@@ -184,6 +189,7 @@ def report_asset_full_list(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_asset_issue_return_history(request):
     from_date, to_date = _date_filters(request)
     asset_id    = request.GET.get("asset_id")
@@ -242,6 +248,7 @@ def report_asset_issue_return_history(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_currently_issued_assets(request):
     records = AssetDetails.objects.select_related("asset", "user", "issued_by").filter(status="ISSUED")
 
@@ -286,6 +293,7 @@ def report_currently_issued_assets(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_low_stock_assets(request):
     assets = Asset.objects.select_related("vendor").filter(status__in=["LOW_STOCK", "OUT_OF_STOCK"])
 
@@ -326,6 +334,7 @@ def report_low_stock_assets(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_warranty_expiry(request):
     from datetime import timedelta
     today = timezone.now().date()
@@ -379,6 +388,7 @@ def report_warranty_expiry(request):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_ticket_summary(request):
     from_date, to_date = _date_filters(request)
     tickets = Ticket.objects.all()
@@ -418,6 +428,7 @@ def report_ticket_summary(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_ticket_full_list(request):
     from_date, to_date = _date_filters(request)
     status      = request.GET.get("status")
@@ -476,6 +487,7 @@ def report_ticket_full_list(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_ticket_approval_history(request):
     from_date, to_date = _date_filters(request)
     ticket_id = request.GET.get("ticket_id")
@@ -529,6 +541,7 @@ def report_ticket_approval_history(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_sla_breach(request):
     now      = timezone.now()
     breached = Ticket.objects.filter(
@@ -576,6 +589,7 @@ def report_sla_breach(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_pending_tickets_by_role(request):
     pending = list(
         Ticket.objects.exclude(status__in=["COMPLETED", "REJECTED"])
@@ -599,6 +613,7 @@ def report_pending_tickets_by_role(request):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_user_summary(request):
     users     = User.objects.all()
     by_role   = list(users.values("role").annotate(count=Count("id")))
@@ -629,6 +644,7 @@ def report_user_summary(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_employee_asset_history(request, employee_id):
     try:
         employee = User.objects.get(id=employee_id)
@@ -699,6 +715,7 @@ def report_employee_asset_history(request, employee_id):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_offboarding_checklist(request, employee_id):
     try:
         employee = User.objects.get(id=employee_id)
@@ -764,6 +781,7 @@ def report_offboarding_checklist(request, employee_id):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_exited_employees(request):
     exited = User.objects.filter(employment_status="EXITED")
 
@@ -802,6 +820,7 @@ def report_exited_employees(request):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_purchase_summary(request):
     from_date, to_date = _date_filters(request)
     prs = PurchaseRequest.objects.all()
@@ -834,6 +853,7 @@ def report_purchase_summary(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_purchase_full_list(request):
     from_date, to_date = _date_filters(request)
     status = request.GET.get("status")
@@ -885,6 +905,7 @@ def report_purchase_full_list(request):
 
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_vendor_summary(request):
     vendors = Vendor.objects.all()
 
@@ -932,6 +953,7 @@ def report_vendor_summary(request):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_audit_log(request):
     from_date, to_date = _date_filters(request)
 
@@ -997,6 +1019,7 @@ def report_audit_log(request):
 # ============================================================
 
 @require_http_methods(["GET"])
+@jwt_required
 def report_dashboard_stats(request):
     now = timezone.now()
 

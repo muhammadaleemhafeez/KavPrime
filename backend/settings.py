@@ -108,12 +108,21 @@ CELERY_BEAT_SCHEDULE = {
 
 
 import os
+from datetime import timedelta
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 
 WSGI_APPLICATION = "backend.wsgi.application"
+
+# ✅ JWT Configuration
+JWT_AUTH = {
+    'JWT_SECRET_KEY': SECRET_KEY,              # Uses Django's SECRET_KEY
+    'JWT_ALGORITHM': 'HS256',
+    'JWT_EXPIRATION_DELTA': timedelta(days=7),  # Token valid for 7 days
+    'JWT_AUTH_HEADER_PREFIX': 'Bearer',
+}
 
 TEMPLATES = [
     {

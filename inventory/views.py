@@ -9,7 +9,10 @@ from users.models import User
 from django.db.models import F
 from .models import PurchaseRequest, Asset , Vendor
 
-# finance get list of approved request 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
+# finance get list of approved request
 from django.views.decorators.http import require_GET
 
 import base64 , os , qrcode, logging
@@ -28,6 +31,7 @@ MEDIA_QR_PATH = "qr_codes/"
 
 @require_POST
 @csrf_exempt
+@jwt_required
 def add_inventory(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -84,7 +88,8 @@ def add_inventory(request):
             connectivity_type=data.get("connectivity_type"),
             purchase_date=data.get("purchase_date"),
             purchase_price=data.get("purchase_price"),
-            vendor_name=data.get("vendor_name"),
+            # vendor_name=data.get("vendor_name"),
+            vendor=Vendor.objects.filter(name=data.get("vendor_name")).first() if data.get("vendor_name") else None,
             invoice_number=data.get("invoice_number"),
             warranty_start=data.get("warranty_start"),
             warranty_end=data.get("warranty_end"),
@@ -145,6 +150,7 @@ def add_inventory(request):
 # UPDATE ASSET
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def update_inventory(request):
     if request.method != "PUT":
         return JsonResponse({"error": "PUT method required"}, status=405)
@@ -212,6 +218,7 @@ def update_inventory(request):
 # DELETE ASSET
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def delete_inventory(request):
     if request.method != "DELETE":
         return JsonResponse({"error": "DELETE method required"}, status=405)
@@ -233,6 +240,7 @@ def delete_inventory(request):
 # LIST ALL ASSETS
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def list_inventory(request):
     assets = Asset.objects.all().values()
     return JsonResponse(list(assets), safe=False)
@@ -243,6 +251,7 @@ def list_inventory(request):
 # -------------------------------
 @csrf_exempt
 @transaction.atomic
+@jwt_required
 def issue_inventory(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
@@ -250,28 +259,27 @@ def issue_inventory(request):
     try:
         data = json.loads(request.body)
 
-        asset_id = data.get("asset_id")
-        employee_id = data.get("employee_id")
-        issued_by_id = data.get("issued_by_id")
+        asset_id        = data.get("asset_id")
+        employee_id     = data.get("employee_id")  # Person RECEIVING the asset
         quantity_issued = int(data.get("quantity_issued", 0))
+        issued_by       = request.jwt_user           # ✅ Person ISSUING — from JWT token
 
-        issue_date = data.get("issue_date")
-        location = data.get("location")
+        issue_date   = data.get("issue_date")
+        location     = data.get("location")
         issue_reason = data.get("issue_reason")
-        remarks = data.get("remarks")
+        remarks      = data.get("remarks")
 
         # validation
-        if not all([asset_id, employee_id, issued_by_id, quantity_issued, issue_date, location, issue_reason]):
+        if not all([asset_id, employee_id, quantity_issued, issue_date, location, issue_reason]):
             return JsonResponse({
-                "error": "asset_id, employee_id, issued_by_id, quantity_issued, issue_date, location, issue_reason are required"
+                "error": "asset_id, employee_id, quantity_issued, issue_date, location, issue_reason are required"
             }, status=400)
 
         if quantity_issued <= 0:
             return JsonResponse({"error": "quantity_issued must be > 0"}, status=400)
 
-        asset = Asset.objects.select_for_update().get(id=asset_id)
+        asset    = Asset.objects.select_for_update().get(id=asset_id)
         employee = User.objects.get(id=employee_id)
-        issued_by = User.objects.get(id=issued_by_id)
 
         if asset.available_quantity < quantity_issued:
             return JsonResponse({"error": "Not enough stock available"}, status=400)
@@ -326,6 +334,7 @@ def issue_inventory(request):
 # Add to your existing inventory/views.py
 
 @csrf_exempt
+@jwt_required
 def list_assets(request):
     """Get all asset details"""
     if request.method != "GET":
@@ -365,6 +374,7 @@ def list_assets(request):
 # get asset by employee_id
 
 @csrf_exempt
+@jwt_required
 def get_employee_assets(request, employee_id):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
@@ -420,6 +430,7 @@ def get_employee_assets(request, employee_id):
 
 
 @csrf_exempt
+@jwt_required
 def get_inventory_assets(request, inventory_id):
     """Get all assets for a specific inventory item"""
     if request.method != "GET":
@@ -461,6 +472,7 @@ def get_inventory_assets(request, inventory_id):
 
 
 @csrf_exempt
+@jwt_required
 def get_asset_detail(request, asset_id):
     """Get single asset detail by ID"""
     if request.method != "GET":
@@ -507,6 +519,7 @@ def get_asset_detail(request, asset_id):
 # -------------------------------
 @csrf_exempt
 @transaction.atomic
+@jwt_required
 def return_asset(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
@@ -566,6 +579,7 @@ def return_asset(request):
 # -------------------------------
 @csrf_exempt
 @transaction.atomic
+@jwt_required
 def return_all_employee_assets(request, employee_id):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
@@ -608,6 +622,7 @@ def return_all_employee_assets(request, employee_id):
 # CREATE PURCHASE REQUEST
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def create_purchase_request(request):
     """
     Create a Purchase Request (Manual or Auto)
@@ -620,27 +635,26 @@ def create_purchase_request(request):
         # JSON or form-data
         if request.content_type == "application/json":
             data = json.loads(request.body)
-            asset_id = data.get("asset_id")
-            quantity_needed = data.get("quantity_needed")
-            remarks = data.get("remarks", "")
-            request_type = data.get("request_type", "MANUAL")
-            triggered_by = data.get("triggered_by", "ADMIN")
-            created_by_id = data.get("created_by")
+            asset_id           = data.get("asset_id")
+            quantity_needed    = data.get("quantity_needed")
+            remarks            = data.get("remarks", "")
+            request_type       = data.get("request_type", "MANUAL")
+            triggered_by       = data.get("triggered_by", "ADMIN")
             invoice_attachment = None
         else:
-            asset_id = request.POST.get("asset_id")
-            quantity_needed = request.POST.get("quantity_needed")
-            remarks = request.POST.get("remarks", "")
-            request_type = request.POST.get("request_type", "MANUAL")
-            triggered_by = request.POST.get("triggered_by", "ADMIN")
-            created_by_id = request.POST.get("created_by")
+            asset_id           = request.POST.get("asset_id")
+            quantity_needed    = request.POST.get("quantity_needed")
+            remarks            = request.POST.get("remarks", "")
+            request_type       = request.POST.get("request_type", "MANUAL")
+            triggered_by       = request.POST.get("triggered_by", "ADMIN")
             invoice_attachment = request.FILES.get("invoice_attachment")
+
+        created_by = request.jwt_user  # ✅ Identified from JWT token
 
         if not asset_id or not quantity_needed:
             return JsonResponse({"error": "asset_id and quantity_needed are required"}, status=400)
 
         asset = Asset.objects.get(id=asset_id)
-        created_by = User.objects.get(id=created_by_id) if created_by_id else None
 
         pr = PurchaseRequest.objects.create(
             asset=asset,
@@ -673,6 +687,7 @@ def create_purchase_request(request):
 # FINANCE APPROVE REQUEST
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def finance_approve_request(request, request_id):
     try:
         pr = PurchaseRequest.objects.get(id=request_id)
@@ -695,6 +710,7 @@ def finance_approve_request(request, request_id):
 
 # when finance Approved then final Approval by HR
 @csrf_exempt
+@jwt_required
 def hr_approve_request(request, request_id):
     try:
         pr = PurchaseRequest.objects.get(id=request_id)
@@ -721,6 +737,7 @@ def hr_approve_request(request, request_id):
 # FINANCE MARK AS PURCHASED
 # -------------------------------
 @csrf_exempt
+@jwt_required
 def finance_mark_as_purchased(request, request_id):
     """
     Finance final step: mark request as purchased, upload invoice, and update asset quantity.
@@ -784,6 +801,7 @@ def finance_mark_as_purchased(request, request_id):
 # -------------------------------
 @csrf_exempt
 @require_GET
+@jwt_required
 def list_purchase_requests(request):
     status = request.GET.get("status")
 
@@ -817,6 +835,7 @@ def list_purchase_requests(request):
 
 # add vendor details
 @csrf_exempt
+@jwt_required
 def add_vendor(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST method allowed"}, status=405)
@@ -843,7 +862,8 @@ def add_vendor(request):
     
 
 # get vendor list
-
+@csrf_exempt
+@jwt_required
 def list_vendors(request):
     if request.method != "GET":
         return JsonResponse({"error": "Only GET method allowed"}, status=405)

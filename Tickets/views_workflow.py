@@ -7,12 +7,16 @@ from django.db.models import Max
 from .models import Workflow, WorkflowStep
 from users.models import Role
 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
 #new added
 
 from django.db import transaction
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
 def list_workflows(request):
     """
     Returns all workflows + steps (grouped by main role + target_role + SLA).
@@ -74,6 +78,7 @@ def list_workflows(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@jwt_required
 def create_workflow_with_roles(request):
     """
     Create workflow + multiple roles with their own steps, each step can go to a target_role.

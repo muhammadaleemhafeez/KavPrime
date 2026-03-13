@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import register_user, login_user, update_user, delete_user, get_all_users, upload_employee_image
+from .views import token_validate, token_refresh, token_me
 from . import views_roles
 from . import views
 
@@ -30,4 +31,9 @@ urlpatterns = [
 
     path("api/workflows/create-with-roles/", create_workflow_with_roles),
     path("api/workflows/", views_roles.list_all_workflows, name="list_all_workflows"),
+
+    # ✅ JWT Token Endpoints
+    path("token/validate/", token_validate, name="token_validate"),
+    path("token/refresh/", token_refresh, name="token_refresh"),
+    path("token/me/", token_me, name="token_me"),
 ]

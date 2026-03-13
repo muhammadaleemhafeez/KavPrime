@@ -7,6 +7,9 @@ from django.db import transaction, IntegrityError
 from Tickets.models import Workflow  # adjust if your import path differs
 from users.models import Role        # ✅ Role is in users app
 
+# ✅ JWT auth
+from users.jwt_decorators import jwt_required
+
 # Workflow must exist in models.py
 from Tickets.models import Workflow as TicketWorkflow, WorkflowStep 
 
@@ -16,6 +19,7 @@ from Tickets.models import Workflow as TicketWorkflow, WorkflowStep
 @csrf_exempt
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
 def list_roles(request):
     roles = Role.objects.all().values("id", "name", "is_active")
     return JsonResponse(list(roles), safe=False)
@@ -24,6 +28,7 @@ def list_roles(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@jwt_required
 def add_role(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -47,6 +52,7 @@ def add_role(request):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@jwt_required
 def set_role_active(request, role_id):
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -179,6 +185,7 @@ def set_role_active(request, role_id):
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
 def list_all_workflows(request):
     """
     Returns all workflows with their attached roles.

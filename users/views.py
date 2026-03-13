@@ -9,6 +9,16 @@ from django.utils import timezone
 
 from Tickets.models import Workflow, WorkflowStep
 
+# JWT imports
+from .jwt_utils import (
+    generate_token,
+    generate_refresh_token,
+    decode_token,
+    get_token_from_request,
+    validate_token,
+)
+from .jwt_decorators import jwt_required, jwt_role_required
+
 
 #registration of user
 @csrf_exempt
@@ -80,12 +90,22 @@ def register_user(request):
         user.set_password(password)
         user.save()
 
+        # ✅ Generate JWT tokens
+        access_token = generate_token(user)
+        refresh_token = generate_refresh_token(user)
+
         return JsonResponse({
             "message": "User registered successfully",
             "id": user.id,
             "role": user.role,
             "employment_status": user.employment_status,
-            "profile_image": user.profile_image.url if user.profile_image else None
+            "profile_image": user.profile_image.url if user.profile_image else None,
+            "tokens": {
+                "access": access_token,
+                "refresh": refresh_token,
+                "token_type": "Bearer",
+                "expires_in": "7 days"
+            }
         }, status=201)
 
     except IntegrityError as e:
@@ -162,13 +182,23 @@ def login_user(request):
                 "steps": steps_data
             }
 
+        # ✅ Generate JWT tokens
+        access_token = generate_token(user)
+        refresh_token = generate_refresh_token(user)
+
         return JsonResponse({
             "message": "Login successful",
             "user_id": user.id,
             "role": user.role,
             "employment_status": user.employment_status,
             "redirect_url": dashboard_map.get(role_key),
-            "workflow": workflow_data
+            "workflow": workflow_data,
+            "tokens": {
+                "access": access_token,
+                "refresh": refresh_token,
+                "token_type": "Bearer",
+                "expires_in": "7 days"
+            }
         }, status=200)
 
     except User.DoesNotExist:
@@ -179,6 +209,7 @@ def login_user(request):
 #update the user
 
 @csrf_exempt
+@jwt_required
 def update_user(request):
     if request.method != "PUT":
         return JsonResponse({"error": "PUT method required"}, status=405)
@@ -230,6 +261,7 @@ def update_user(request):
 
 #delete user 
 @csrf_exempt
+@jwt_required
 def delete_user(request):
     if request.method != "DELETE":
         return JsonResponse({"error": "DELETE method required"}, status=405)
@@ -254,6 +286,7 @@ def delete_user(request):
     return JsonResponse({"message": "User deleted successfully"})
 
 @csrf_exempt
+@jwt_required
 def get_all_users(request):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
@@ -277,6 +310,7 @@ def get_all_users(request):
 
 
 @csrf_exempt
+@jwt_required
 def upload_employee_image(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
@@ -312,6 +346,7 @@ def upload_employee_image(request):
 
 
 @csrf_exempt
+@jwt_required
 def mark_employee_exited(request):
     """
     Admin/HR will call this after returning inventory.
@@ -348,6 +383,7 @@ from django.views.decorators.http import require_http_methods
 from users.models import User
 
 @require_http_methods(["GET"])
+@jwt_required
 def list_team_pmo(request):
     """
     API to get all users with role TEAM_PMO
@@ -366,3 +402,158 @@ def list_team_pmo(request):
     ]
 
     return JsonResponse({"team_pmo_users": result, "total": len(result)}, status=200)
+
+
+# ========================================
+# JWT TOKEN ENDPOINTS
+# ========================================
+
+@csrf_exempt
+def token_validate(request):
+    """
+    POST /api/users/token/validate/
+    Validates a Bearer token from the Authorization header.
+    Returns user info if the token is valid.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    token = get_token_from_request(request)
+
+    if not token:
+        # Also accept token in request body
+        try:
+            data = json.loads(request.body)
+            token = data.get("token")
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    if not token:
+        return JsonResponse({
+            "error": "Token is required",
+            "detail": "Send token in Authorization header (Bearer <token>) or in request body as {\"token\": \"...\"}"
+        }, status=400)
+
+    result = validate_token(token)
+
+    if result['valid']:
+        payload = result['payload']
+        # Verify user still exists and is active
+        try:
+            user = User.objects.get(id=payload['user_id'])
+            if not user.is_active:
+                return JsonResponse({
+                    "valid": False,
+                    "error": "User account is inactive"
+                }, status=401)
+
+            return JsonResponse({
+                "valid": True,
+                "user": {
+                    "user_id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "role": user.role,
+                    "employment_status": user.employment_status,
+                },
+                "token_type": payload.get("token_type"),
+                "issued_at": payload.get("iat"),
+                "expires_at": payload.get("exp"),
+            }, status=200)
+
+        except User.DoesNotExist:
+            return JsonResponse({
+                "valid": False,
+                "error": "User associated with this token no longer exists"
+            }, status=401)
+    else:
+        return JsonResponse({
+            "valid": False,
+            "error": result['error']
+        }, status=401)
+
+
+@csrf_exempt
+def token_refresh(request):
+    """
+    POST /api/users/token/refresh/
+    Takes a refresh token and returns a new access token.
+    Body: {"refresh": "<refresh_token>"}
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    refresh_token_str = data.get("refresh")
+
+    if not refresh_token_str:
+        return JsonResponse({
+            "error": "Refresh token is required",
+            "detail": "Send {\"refresh\": \"<your_refresh_token>\"}"
+        }, status=400)
+
+    try:
+        payload = decode_token(refresh_token_str)
+    except ValueError as e:
+        return JsonResponse({
+            "error": "Invalid or expired refresh token",
+            "detail": str(e)
+        }, status=401)
+
+    # Ensure the token is a refresh token
+    if payload.get('token_type') != 'refresh':
+        return JsonResponse({
+            "error": "Invalid token type",
+            "detail": "Expected a refresh token, got an access token"
+        }, status=401)
+
+    # Fetch the user
+    try:
+        user = User.objects.get(id=payload['user_id'])
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=401)
+
+    if not user.is_active:
+        return JsonResponse({"error": "User account is inactive"}, status=403)
+
+    # Generate new access token
+    new_access_token = generate_token(user)
+
+    return JsonResponse({
+        "message": "Token refreshed successfully",
+        "tokens": {
+            "access": new_access_token,
+            "token_type": "Bearer",
+            "expires_in": "7 days"
+        }
+    }, status=200)
+
+
+@csrf_exempt
+@jwt_required
+def token_me(request):
+    """
+    GET /api/users/token/me/
+    Protected endpoint — returns the authenticated user's profile.
+    Requires: Authorization: Bearer <access_token>
+    """
+    if request.method != "GET":
+        return JsonResponse({"error": "GET required"}, status=405)
+
+    user = request.jwt_user
+
+    return JsonResponse({
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "designation": user.designation,
+        "employment_status": user.employment_status,
+        "join_date": user.join_date.isoformat() if user.join_date else None,
+        "profile_image": user.profile_image.url if user.profile_image else None,
+        "is_active": user.is_active,
+    }, status=200)
