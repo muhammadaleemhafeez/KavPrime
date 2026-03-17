@@ -26,7 +26,7 @@ User   = get_user_model()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# INTERNAL HELPER
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _apply_priority(ticket, priority, actioner_user):
@@ -35,6 +35,37 @@ def _apply_priority(ticket, priority, actioner_user):
         ticket.priority        = priority
         ticket.priority_set_by = actioner_user
         ticket.priority_set_at = timezone.now()
+
+
+def _paginate(request, data):
+    """
+    Pagination helper.
+    - Default page  : 1
+    - Default limit : 10
+    - If frontend sends no params → returns page 1 with 10 records automatically.
+    Usage: ?page=1&limit=10
+    """
+    try:
+        page  = max(1, int(request.GET.get("page",  1)))
+        limit = max(1, int(request.GET.get("limit", 10)))
+    except (ValueError, TypeError):
+        page  = 1
+        limit = 10
+
+    total       = len(data)
+    start       = (page - 1) * limit
+    end         = start + limit
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    return {
+        "page":        page,
+        "limit":       limit,
+        "total":       total,
+        "total_pages": total_pages,
+        "has_next":    page < total_pages,
+        "has_prev":    page > 1,
+        "data":        data[start:end],
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +82,7 @@ def create_ticket(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    employee          = request.jwt_user  # ✅ Identified from JWT token
+    employee          = request.jwt_user
     ticket_type_input = (data.get("ticket_type") or "").strip()
     title             = data.get("title")
     description       = data.get("description")
@@ -150,8 +181,7 @@ def create_ticket(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SET TICKET PRIORITY  ← STANDALONE ENDPOINT
-# Any approver (not the creator) can call this at any time while ticket is open
+# SET TICKET PRIORITY
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -169,7 +199,7 @@ def set_ticket_priority(request, ticket_id):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     priority = (data.get("priority") or "").strip().upper()
-    actioner = request.jwt_user  # ✅ Identified from JWT token
+    actioner = request.jwt_user
 
     if priority not in ["CRITICAL", "NON_CRITICAL"]:
         return JsonResponse(
@@ -190,7 +220,6 @@ def set_ticket_priority(request, ticket_id):
             status=400
         )
 
-    # Ticket creator cannot set priority on their own ticket
     if actioner.id == ticket.employee_id:
         return JsonResponse(
             {"error": "Ticket creator cannot set the priority. Only approvers can."},
@@ -221,26 +250,36 @@ def set_ticket_priority(request, ticket_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST TICKETS (by employee)
+# LIST TICKETS (by employee) — ✅ PAGINATED (default page=1, limit=10)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
 @jwt_required
 def list_tickets(request):
-    # ✅ Employee is identified from JWT token; admins may optionally filter by ?employee_id=
     employee_id = request.GET.get("employee_id") or request.jwt_user.id
 
-    tickets = Ticket.objects.filter(employee_id=employee_id).values(
+    tickets = list(Ticket.objects.filter(employee_id=employee_id).values(
         "id", "employee_id", "ticket_type", "title", "description",
         "status", "priority",
         "created_by_role", "workflow_id",
         "current_step", "current_role", "created_at", "updated_at",
-    )
-    return JsonResponse(list(tickets), safe=False)
+    ))
+
+    paginated = _paginate(request, tickets)
+    return JsonResponse({
+        "total":       paginated["total"],
+        "total_pages": paginated["total_pages"],
+        "page":        paginated["page"],
+        "limit":       paginated["limit"],
+        "has_next":    paginated["has_next"],
+        "has_prev":    paginated["has_prev"],
+        "tickets":     paginated["data"],
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST ALL TICKETS — supports ?priority=CRITICAL filter
+# LIST ALL TICKETS — ✅ PAGINATED (default page=1, limit=10)
+# supports ?priority=CRITICAL filter
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
@@ -252,17 +291,27 @@ def list_all_tickets(request):
     if priority_filter:
         tickets = tickets.filter(priority__iexact=priority_filter)
 
-    tickets = tickets.values(
+    tickets = list(tickets.values(
         "id", "employee_id", "ticket_type", "title", "description",
         "status", "priority",
         "created_by_role", "workflow_id",
         "current_step", "current_role", "created_at", "updated_at",
-    )
-    return JsonResponse(list(tickets), safe=False, status=200)
+    ))
+
+    paginated = _paginate(request, tickets)
+    return JsonResponse({
+        "total":       paginated["total"],
+        "total_pages": paginated["total_pages"],
+        "page":        paginated["page"],
+        "limit":       paginated["limit"],
+        "has_next":    paginated["has_next"],
+        "has_prev":    paginated["has_prev"],
+        "tickets":     paginated["data"],
+    }, status=200)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TICKET HISTORY — now includes full priority audit info
+# TICKET HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 
 @require_http_methods(["GET"])
@@ -354,7 +403,6 @@ def ticket_history(request, ticket_id):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TICKET ACTION — Approve / Reject
-# Approver can OPTIONALLY set priority in the same request
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -371,7 +419,7 @@ def ticket_action(request, ticket_id):
     remarks             = data.get("remarks", "")
     role_email_map      = data.get("role_email_map", {})
     ticket_creator_role = (data.get("role") or "").strip()
-    actioner_user       = request.jwt_user  # ✅ Identified from JWT token
+    actioner_user       = request.jwt_user
     priority            = (data.get("priority") or "").strip().upper() or None
 
     if priority and priority not in ["CRITICAL", "NON_CRITICAL"]:
@@ -405,8 +453,6 @@ def ticket_action(request, ticket_id):
             status=403
         )
 
-    # ✅ actioner_user already set from JWT token above
-    # Apply priority if provided alongside the action
     if priority:
         _apply_priority(ticket, priority, actioner_user)
 
@@ -539,14 +585,13 @@ def delete_ticket(request, ticket_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD
+# DASHBOARD — ✅ PAGINATED (default page=1, limit=10)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 def dashboard_tickets(request, user_id):
-    # ✅ JWT authenticates the request; user_id in URL allows admin to view any user's dashboard
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
@@ -579,8 +624,14 @@ def dashboard_tickets(request, user_id):
             }
         })
 
+    paginated = _paginate(request, ticket_list)
     return JsonResponse({
-        "message": f"Tickets assigned to {getattr(user, 'email', str(user))}",
-        "tickets": ticket_list,
-        "total":   tickets.count(),
+        "message":     f"Tickets assigned to {getattr(user, 'email', str(user))}",
+        "total":       paginated["total"],
+        "total_pages": paginated["total_pages"],
+        "page":        paginated["page"],
+        "limit":       paginated["limit"],
+        "has_next":    paginated["has_next"],
+        "has_prev":    paginated["has_prev"],
+        "tickets":     paginated["data"],
     })
