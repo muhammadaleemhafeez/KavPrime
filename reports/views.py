@@ -618,14 +618,46 @@ def report_pending_tickets_by_role(request):
 # 3. USER & EMPLOYEE REPORTS
 # ============================================================
 
+# @require_http_methods(["GET"])
+# @jwt_required
+# def report_user_summary(request):
+#     users     = User.objects.all()
+#     by_role   = list(users.values("role").annotate(count=Count("id")))
+#     by_status = list(users.values("employment_status").annotate(count=Count("id")))
+#     active    = users.filter(is_active=True, employment_status="ACTIVE").count()
+#     inactive  = users.filter(is_active=False).count()
+
+#     if _wants_csv(request):
+#         rows = []
+#         for r in by_role:
+#             rows.append({"group": "by_role",              "key": r["role"],              "count": r["count"]})
+#         for r in by_status:
+#             rows.append({"group": "by_employment_status", "key": r["employment_status"], "count": r["count"]})
+#         rows.append({"group": "TOTAL", "key": "total_users",       "count": users.count()})
+#         rows.append({"group": "TOTAL", "key": "active_accounts",   "count": active})
+#         rows.append({"group": "TOTAL", "key": "inactive_accounts", "count": inactive})
+#         return _csv_response("user_summary", ["group", "key", "count"], rows)
+
+#     return JsonResponse({
+#         "report":               "User Summary",
+#         "generated_at":         timezone.now().isoformat(),
+#         "total_users":          users.count(),
+#         "active_accounts":      active,
+#         "inactive_accounts":    inactive,
+#         "by_role":              by_role,
+#         "by_employment_status": by_status,
+#     })
+
+
 @require_http_methods(["GET"])
 @jwt_required
 def report_user_summary(request):
-    users     = User.objects.all()
-    by_role   = list(users.values("role").annotate(count=Count("id")))
-    by_status = list(users.values("employment_status").annotate(count=Count("id")))
-    active    = users.filter(is_active=True, employment_status="ACTIVE").count()
-    inactive  = users.filter(is_active=False).count()
+    users      = User.objects.all()
+    by_role    = list(users.values("role").annotate(count=Count("id")))
+    by_status  = list(users.values("employment_status").annotate(count=Count("id")))
+    active     = users.filter(employment_status="ACTIVE").count()
+    onboarding = users.filter(employment_status="ONBOARDING").count()
+    inactive   = users.filter(employment_status="EXITED").count()
 
     if _wants_csv(request):
         rows = []
@@ -633,9 +665,10 @@ def report_user_summary(request):
             rows.append({"group": "by_role",              "key": r["role"],              "count": r["count"]})
         for r in by_status:
             rows.append({"group": "by_employment_status", "key": r["employment_status"], "count": r["count"]})
-        rows.append({"group": "TOTAL", "key": "total_users",       "count": users.count()})
-        rows.append({"group": "TOTAL", "key": "active_accounts",   "count": active})
-        rows.append({"group": "TOTAL", "key": "inactive_accounts", "count": inactive})
+        rows.append({"group": "TOTAL", "key": "total_users",         "count": users.count()})
+        rows.append({"group": "TOTAL", "key": "active_accounts",     "count": active})
+        rows.append({"group": "TOTAL", "key": "onboarding_accounts", "count": onboarding})
+        rows.append({"group": "TOTAL", "key": "inactive_accounts",   "count": inactive})
         return _csv_response("user_summary", ["group", "key", "count"], rows)
 
     return JsonResponse({
@@ -643,11 +676,11 @@ def report_user_summary(request):
         "generated_at":         timezone.now().isoformat(),
         "total_users":          users.count(),
         "active_accounts":      active,
+        "onboarding_accounts":  onboarding,
         "inactive_accounts":    inactive,
         "by_role":              by_role,
         "by_employment_status": by_status,
     })
-
 
 @require_http_methods(["GET"])
 @jwt_required
