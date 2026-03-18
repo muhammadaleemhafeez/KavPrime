@@ -28,9 +28,15 @@ def _date_filters(request):
 
 def _apply_date_range(qs, field, from_date, to_date):
     if from_date:
-        qs = qs.filter(**{f"{field}__date__gte": from_date})
+        try:
+            qs = qs.filter(**{f"{field}__date__gte": from_date})
+        except Exception:
+            qs = qs.filter(**{f"{field}__gte": from_date})
     if to_date:
-        qs = qs.filter(**{f"{field}__date__lte": to_date})
+        try:
+            qs = qs.filter(**{f"{field}__date__lte": to_date})
+        except Exception:
+            qs = qs.filter(**{f"{field}__lte": to_date})
     return qs
 
 
