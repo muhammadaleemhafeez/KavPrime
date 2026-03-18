@@ -886,8 +886,78 @@ def list_vendors(request):
 
 
 
+@csrf_exempt
+@jwt_required
+def edit_vendor(request, vendor_id):
+    if request.method != "PUT":
+        return JsonResponse({"error": "Only PUT method allowed"}, status=405)
+
+    try:
+        vendor = Vendor.objects.get(id=vendor_id)
+    except Vendor.DoesNotExist:
+        return JsonResponse({"error": "Vendor not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+
+        # Only update fields that are provided in request
+        if "name" in data:
+            vendor.name = data["name"]
+        if "address" in data:
+            vendor.address = data["address"]
+        if "contact_person" in data:
+            vendor.contact_person = data["contact_person"]
+        if "phone" in data:
+            vendor.phone = data["phone"]
+        if "email" in data:
+            vendor.email = data["email"]
+        if "gst_number" in data:
+            vendor.gst_number = data["gst_number"]
+
+        vendor.save()
+
+        return JsonResponse({
+            "message":        "Vendor updated successfully",
+            "vendor_id":      vendor.id,
+            "name":           vendor.name,
+            "address":        vendor.address,
+            "contact_person": vendor.contact_person,
+            "phone":          vendor.phone,
+            "email":          vendor.email,
+            "gst_number":     vendor.gst_number,
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+
+@csrf_exempt
+@jwt_required
+def delete_vendor(request, vendor_id):
+    if request.method != "DELETE":
+        return JsonResponse({"error": "Only DELETE method allowed"}, status=405)
+
+    try:
+        vendor = Vendor.objects.get(id=vendor_id)
+    except Vendor.DoesNotExist:
+        return JsonResponse({"error": "Vendor not found"}, status=404)
+
+    # Check if vendor has assets linked to it
+    linked_assets = Asset.objects.filter(vendor=vendor).count()
+    if linked_assets > 0:
+        return JsonResponse({
+            "error": f"Cannot delete vendor. {linked_assets} asset(s) are linked to this vendor."
+        }, status=400)
+
+    vendor_name = vendor.name
+    vendor.delete()
+
+    return JsonResponse({
+        "message":   f"Vendor '{vendor_name}' deleted successfully",
+        "vendor_id": vendor_id,
+    }, status=200)
+
 from django.shortcuts import get_object_or_404, render
-from .models import Asset
 
 def asset_details(request, asset_id):
     asset = get_object_or_404(Asset, id=asset_id)

@@ -13,7 +13,9 @@ from .views import (
     return_all_employee_assets,
     create_purchase_request,
     list_purchase_requests,
-    asset_details
+    asset_details,
+    edit_vendor,
+    delete_vendor
 )
 
 urlpatterns = [
@@ -64,7 +66,12 @@ urlpatterns = [
     path("vendors/", views.list_vendors, name="list_vendors"),
 
 
-    path("assets/<int:asset_id>/details/", asset_details, name="asset_details")
+    path("assets/<int:asset_id>/details/", asset_details, name="asset_details"),
 
+    # edit vendor details
+    path("vendors/<int:vendor_id>/edit/",   edit_vendor,   name="edit_vendor"),
+
+    # delete vendor
+    path("vendors/<int:vendor_id>/delete/", delete_vendor, name="delete_vendor"),
 
 ]
