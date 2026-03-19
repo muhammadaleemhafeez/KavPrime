@@ -269,8 +269,66 @@ def delete_inventory(request):
 @csrf_exempt
 @jwt_required
 def list_inventory(request):
-    assets    = list(Asset.objects.all().values())
-    paginated = _paginate(request, assets)
+    from django.db.models import Q
+
+    assets = Asset.objects.select_related("vendor", "assigned_to").all()
+
+    # ── Filter by category ────────────────────────────────────────────────────
+    category = request.GET.get("category")
+    if category:
+        assets = assets.filter(category__iexact=category)
+
+    # ── Filter by status ──────────────────────────────────────────────────────
+    status = request.GET.get("status")
+    if status:
+        assets = assets.filter(status__iexact=status)
+
+    # ── Search by serial_number, asset_tag, model_name, brand ────────────────
+    search = request.GET.get("search")
+    if search:
+        assets = assets.filter(
+            Q(serial_number__icontains=search) |
+            Q(asset_tag__icontains=search)     |
+            Q(model_name__icontains=search)    |
+            Q(brand__icontains=search)
+        )
+
+    # ── Filter by issued (true = only issued, false = only not issued) ────────
+    issued = request.GET.get("issued")
+    if issued is not None:
+        if issued.lower() == "true":
+            assets = assets.filter(issued_quantity__gt=0)
+        elif issued.lower() == "false":
+            assets = assets.filter(issued_quantity=0)
+
+    # ── Build rows ────────────────────────────────────────────────────────────
+    assets_list = []
+    for a in assets:
+        assets_list.append({
+            "id":                  a.id,
+            "asset_tag":           a.asset_tag,
+            "serial_number":       a.serial_number or "",
+            "brand":               a.brand or "",
+            "model_name":          a.model_name or "",
+            "category":            a.category or "",
+            "status":              a.status or "",
+            "condition":           a.condition or "",
+            "total_quantity":      a.total_quantity,
+            "available_quantity":  a.available_quantity,
+            "issued_quantity":     a.issued_quantity,
+            "minimum_stock_level": a.minimum_stock_level,
+            "purchase_date":       a.purchase_date.isoformat() if a.purchase_date else "",
+            "purchase_price":      float(a.purchase_price) if a.purchase_price else "",
+            "vendor_name":         a.vendor.name if a.vendor else "",
+            "warranty_status":     a.warranty_status or "",
+            "warranty_end":        a.warranty_end.isoformat() if a.warranty_end else "",
+            "assigned_to":         a.assigned_to.name if a.assigned_to else "",
+            "current_location":    a.current_location or "",
+            "created_at":          a.created_at.isoformat(),
+            "updated_at":          a.updated_at.isoformat(),
+        })
+
+    paginated = _paginate(request, assets_list)
     return JsonResponse({
         "total":       paginated["total"],
         "total_pages": paginated["total_pages"],
@@ -278,9 +336,14 @@ def list_inventory(request):
         "limit":       paginated["limit"],
         "has_next":    paginated["has_next"],
         "has_prev":    paginated["has_prev"],
-        "assets":      paginated["data"],
+        "filters_applied": {
+            "category": category or None,
+            "status":   status   or None,
+            "search":   search   or None,
+            "issued":   issued   or None,
+        },
+        "assets": paginated["data"],
     })
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ISSUE ASSET
