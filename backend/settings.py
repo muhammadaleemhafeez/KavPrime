@@ -55,8 +55,8 @@ DATABASES = {
         'NAME': 'kavprime',
         'USER': 'postgres',
         'PASSWORD': '123456',
-        # 'HOST': 'localhost',
-        'HOST': 'host.docker.internal',
+        'HOST': 'localhost',
+        # 'HOST': 'host.docker.internal',
         'PORT': '5432',
     }
 }

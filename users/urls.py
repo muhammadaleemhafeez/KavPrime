@@ -4,7 +4,6 @@ from .views import token_validate, token_refresh, token_me
 from . import views_roles
 from . import views
 
-# from .views_roles import create_workflow_with_roles
 from .views import list_team_pmo
 from Tickets.views_workflow import create_workflow_with_roles
 
@@ -27,7 +26,6 @@ urlpatterns = [
     # ✅ Role Management APIs (for Postman + Admin-like control)
     path("roles/", views_roles.list_roles, name="list_roles"),
     path("roles/add/", views_roles.add_role, name="add_role"),
-    path("roles/<int:role_id>/active/", views_roles.set_role_active, name="set_role_active"),
 
     path("api/workflows/create-with-roles/", create_workflow_with_roles),
     path("api/workflows/", views_roles.list_all_workflows, name="list_all_workflows"),

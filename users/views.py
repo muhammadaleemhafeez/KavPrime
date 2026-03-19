@@ -378,7 +378,6 @@ def mark_employee_exited(request):
         return JsonResponse({"error": "Employee not found"}, status=404)
 
 
-from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from users.models import User
 
