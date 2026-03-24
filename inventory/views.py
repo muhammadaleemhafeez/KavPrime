@@ -454,9 +454,63 @@ def list_assets(request):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
 
-    assets      = AssetDetails.objects.select_related("asset", "user", "issued_by").all()
-    assets_list = []
+    from django.db.models import Q
 
+    # ✅ Get all filters from query params
+    search       = request.GET.get("search")
+    status       = request.GET.get("status")
+    employee_id  = request.GET.get("employee_id")
+    asset_id     = request.GET.get("asset_id")
+    category     = request.GET.get("category")
+    from_date    = request.GET.get("from_date")
+    to_date      = request.GET.get("to_date")
+    issued_by_id = request.GET.get("issued_by_id")
+
+    assets = AssetDetails.objects.select_related(
+        "asset", "user", "issued_by"
+    ).all()
+
+    # ✅ Filter by status
+    if status:
+        assets = assets.filter(status__iexact=status)
+
+    # ✅ Filter by employee
+    if employee_id:
+        assets = assets.filter(user__id=employee_id)
+
+    # ✅ Filter by specific asset
+    if asset_id:
+        assets = assets.filter(asset__id=asset_id)
+
+    # ✅ Filter by category
+    if category:
+        assets = assets.filter(asset__category__iexact=category)
+
+    # ✅ Filter by issued_by
+    if issued_by_id:
+        assets = assets.filter(issued_by__id=issued_by_id)
+
+    # ✅ Filter by date range
+    if from_date:
+        assets = assets.filter(issue_date__date__gte=from_date)
+    if to_date:
+        assets = assets.filter(issue_date__date__lte=to_date)
+
+    # ✅ Search across multiple fields
+    if search:
+        assets = assets.filter(
+            Q(asset__asset_tag__icontains=search)    |
+            Q(asset__brand__icontains=search)        |
+            Q(asset__model_name__icontains=search)   |
+            Q(asset__serial_number__icontains=search)|
+            Q(user__name__icontains=search)          |
+            Q(user__email__icontains=search)         |
+            Q(location__icontains=search)            |
+            Q(issue_reason__icontains=search)        |
+            Q(remarks__icontains=search)
+        )
+
+    assets_list = []
     for asset in assets:
         assets_list.append({
             "id":              asset.id,
@@ -465,12 +519,16 @@ def list_assets(request):
             "brand":           asset.asset.brand if asset.asset else "",
             "model_name":      asset.asset.model_name if asset.asset else "",
             "category":        asset.asset.category if asset.asset else "",
+            "serial_number":   asset.asset.serial_number if asset.asset else "",
             "employee_id":     asset.user.id,
             "employee_name":   asset.user.name,
             "employee_email":  asset.user.email,
             "quantity_issued": asset.quantity_issued,
+            "issue_date":      asset.issue_date.isoformat() if asset.issue_date else None,
             "issued_date":     asset.created_at.isoformat(),
             "return_date":     asset.return_date.isoformat() if asset.return_date else None,
+            "location":        asset.location or "",
+            "issue_reason":    asset.issue_reason or "",
             "status":          asset.status,
             "remarks":         asset.remarks or "",
             "issued_by_id":    asset.issued_by.id if asset.issued_by else None,
@@ -487,7 +545,17 @@ def list_assets(request):
         "limit":       paginated["limit"],
         "has_next":    paginated["has_next"],
         "has_prev":    paginated["has_prev"],
-        "assets":      paginated["data"],
+        "filters_applied": {
+            "search":       search       or None,
+            "status":       status       or None,
+            "employee_id":  employee_id  or None,
+            "asset_id":     asset_id     or None,
+            "category":     category     or None,
+            "from_date":    from_date    or None,
+            "to_date":      to_date      or None,
+            "issued_by_id": issued_by_id or None,
+        },
+        "assets": paginated["data"],
     })
 
 
@@ -643,7 +711,6 @@ def get_asset_detail(request, asset_id):
 # ─────────────────────────────────────────────────────────────────────────────
 # RETURN SINGLE ASSET — ✅ ALL quantity logic handled here
 # ─────────────────────────────────────────────────────────────────────────────
-
 @csrf_exempt
 @transaction.atomic
 @jwt_required
@@ -652,104 +719,108 @@ def return_asset(request):
         return JsonResponse({"error": "POST method required"}, status=405)
 
     try:
-        data            = json.loads(request.body)
-        asset_detail_id = data.get("asset_id")
-        remarks         = data.get("remarks", "")
+        data    = json.loads(request.body)
+        remarks = data.get("remarks", "")
+        status  = data.get("status", "RETURNED")
 
-        # ✅ Get quantities from request
-        quantity_returned = int(data.get("quantity_returned", 0))
-        quantity_damaged  = int(data.get("quantity_damaged",  0))
-        quantity_lost     = int(data.get("quantity_lost",     0))
+        # ✅ Accept both single ID and array of IDs
+        asset_ids = data.get("asset_ids", [])
+        if not asset_ids:
+            # backward compatible — still support single asset_id
+            single_id = data.get("asset_id")
+            if single_id:
+                asset_ids = [single_id]
 
-        # ✅ Validate at least one quantity provided
-        total_action = quantity_returned + quantity_damaged + quantity_lost
-        if total_action <= 0:
+        if not asset_ids:
             return JsonResponse({
-                "error": "Provide at least one of: quantity_returned, quantity_damaged, quantity_lost"
+                "error": "Provide asset_id or asset_ids array"
             }, status=400)
 
-        # ✅ FIXED: of=("self",) prevents nullable outer join error
-        asset_detail = AssetDetails.objects.select_for_update(
-            of=("self",)
-        ).select_related("asset").get(id=asset_detail_id)
-
-        asset = asset_detail.asset
-
-        # ✅ Prevent double return
-        if asset_detail.status in ["RETURNED", "DAMAGED", "LOST"]:
+        if status not in ["RETURNED", "DAMAGED", "LOST"]:
             return JsonResponse({
-                "message":  "Asset already closed",
-                "asset_id": asset_detail.id
-            }, status=200)
-
-        # ✅ Validate total doesn't exceed issued quantity
-        if total_action > asset_detail.quantity_issued:
-            return JsonResponse({
-                "error": f"Total quantities ({total_action}) exceed issued quantity ({asset_detail.quantity_issued})"
+                "error": "status must be RETURNED, DAMAGED or LOST"
             }, status=400)
 
-        # ✅ RETURNED — reusable, add back to available
-        if quantity_returned > 0:
-            asset.available_quantity += quantity_returned
-            asset.quantity_issued    -= quantity_returned
+        results      = []
+        errors       = []
+        
+        for asset_detail_id in asset_ids:
+            try:
+                # ✅ FIXED: of=("self",) prevents nullable outer join error
+                asset_detail = AssetDetails.objects.select_for_update(
+                    of=("self",)
+                ).select_related("asset").get(id=asset_detail_id)
 
-        # ✅ DAMAGED — gone forever, remove from total
-        if quantity_damaged > 0:
-            asset.total_quantity  -= quantity_damaged
-            asset.quantity_issued -= quantity_damaged
+                asset = asset_detail.asset
 
-        # ✅ LOST — gone forever, remove from total
-        if quantity_lost > 0:
-            asset.total_quantity  -= quantity_lost
-            asset.quantity_issued -= quantity_lost
+                # ✅ Skip already closed records
+                if asset_detail.status in ["RETURNED", "DAMAGED", "LOST"]:
+                    errors.append({
+                        "asset_id": asset_detail_id,
+                        "error":    "Asset already closed"
+                    })
+                    continue
 
-        # ✅ Determine final status of this issue record
-        if quantity_returned > 0 and (quantity_damaged > 0 or quantity_lost > 0):
-            final_status = "PARTIAL_RETURN"
-        elif quantity_damaged > 0 and quantity_lost == 0 and quantity_returned == 0:
-            final_status = "DAMAGED"
-        elif quantity_lost > 0 and quantity_damaged == 0 and quantity_returned == 0:
-            final_status = "LOST"
-        else:
-            final_status = "RETURNED"
+                # ✅ Update asset detail record
+                asset_detail.status      = status
+                asset_detail.return_date = timezone.now()
+                if remarks:
+                    asset_detail.remarks = remarks
+                asset_detail.save(update_fields=[
+                    "status", "return_date", "remarks", "updated_at"
+                ])
 
-        # ✅ Update asset detail record
-        asset_detail.status      = final_status
-        asset_detail.return_date = timezone.now()
-        if remarks:
-            asset_detail.remarks = remarks
-        asset_detail.save(update_fields=[
-            "status", "return_date", "remarks", "updated_at"
-        ])
+                # ✅ RETURNED — item reusable
+                if status == "RETURNED":
+                    asset.available_quantity += asset_detail.quantity_issued
+                    asset.quantity_issued    -= asset_detail.quantity_issued
 
-        # ✅ Always update status after quantity change
-        _update_asset_status(asset)
-        asset.save(update_fields=[
-            "available_quantity",
-            "quantity_issued",
-            "total_quantity",
-            "status",
-            "updated_at",
-        ])
+                # ✅ DAMAGED — item gone forever
+                elif status == "DAMAGED":
+                    asset.total_quantity  -= asset_detail.quantity_issued
+                    asset.quantity_issued -= asset_detail.quantity_issued
+
+                # ✅ LOST — item gone forever
+                elif status == "LOST":
+                    asset.total_quantity  -= asset_detail.quantity_issued
+                    asset.quantity_issued -= asset_detail.quantity_issued
+
+                # ✅ Update asset status
+                _update_asset_status(asset)
+                asset.save(update_fields=[
+                    "available_quantity",
+                    "quantity_issued",
+                    "total_quantity",
+                    "status",
+                    "updated_at",
+                ])
+
+                results.append({
+                    "asset_id":              asset_detail_id,
+                    "asset_tag":             asset.asset_tag,
+                    "status":                status,
+                    "total_quantity":        asset.total_quantity,
+                    "available_quantity":    asset.available_quantity,
+                    "quantity_issued":       asset.quantity_issued,
+                    "asset_status":          asset.status,
+                })
+
+            except AssetDetails.DoesNotExist:
+                errors.append({
+                    "asset_id": asset_detail_id,
+                    "error":    "Asset detail not found"
+                })
 
         return JsonResponse({
-            "message":                  f"Asset return processed successfully",
-            "asset_id":                 asset_detail.id,
-            "final_status":             final_status,
-            "quantity_returned":        quantity_returned,
-            "quantity_damaged":         quantity_damaged,
-            "quantity_lost":            quantity_lost,
-            "remarks":                  remarks,
-            "asset_total_quantity":     asset.total_quantity,
-            "asset_available_quantity": asset.available_quantity,
-            "asset_quantity_issued":    asset.quantity_issued,
-            "asset_status":             asset.status,
+            "message":        f"Processed {len(results)} asset(s)",
+            "status":         status,
+            "remarks":        remarks,
+            "success_count":  len(results),
+            "error_count":    len(errors),
+            "results":        results,
+            "errors":         errors,
         }, status=200)
 
-    except AssetDetails.DoesNotExist:
-        return JsonResponse({"error": "Asset detail not found"}, status=404)
-    except Asset.DoesNotExist:
-        return JsonResponse({"error": "Asset not found"}, status=404)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
