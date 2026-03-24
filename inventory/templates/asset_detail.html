@@ -145,7 +145,7 @@
             <ul>
                 <li><strong>Total Quantity:</strong> {{ asset.total_quantity }}</li>
                 <li><strong>Available Quantity:</strong> {{ asset.available_quantity }}</li>
-                <li><strong>Issued Quantity:</strong> {{ asset.issued_quantity }}</li>
+                <li><strong>Issued Quantity:</strong> {{ asset.quantity_issued }}</li>
                 <li><strong>Minimum Stock Level:</strong> {{ asset.minimum_stock_level }}</li>
                 <li><strong>Input Ports:</strong> {{ asset.input_ports }}</li>
                 <li><strong>USB Hub:</strong> {% if asset.usb_hub_available %}<span class="badge badge-active">Yes</span>{% else %}<span class="badge badge-none">No</span>{% endif %}</li>

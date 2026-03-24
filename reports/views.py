@@ -160,7 +160,7 @@ def report_asset_full_list(request):
             "condition":          a.condition,
             "total_quantity":     a.total_quantity,
             "available_quantity": a.available_quantity,
-            "issued_quantity":    a.issued_quantity,
+            "quantity_issued":    a.quantity_issued,
             "purchase_date":      a.purchase_date.isoformat() if a.purchase_date else "",
             "purchase_price":     float(a.purchase_price) if a.purchase_price else "",
             "vendor_name":        a.vendor.name if a.vendor else "",   # ✅ FIX
@@ -173,7 +173,7 @@ def report_asset_full_list(request):
     if _wants_csv(request):
         headers = [
             "asset_id","asset_tag","brand","model_name","category","status","condition",
-            "total_quantity","available_quantity","issued_quantity","purchase_date",
+            "total_quantity","available_quantity","quantity_issued","purchase_date",
             "purchase_price","vendor_name","warranty_status","warranty_end",
             "assigned_to","current_location",
         ]

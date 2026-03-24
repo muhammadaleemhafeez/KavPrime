@@ -13,7 +13,6 @@ from .models import PurchaseRequest, Asset, Vendor
 # ✅ JWT auth
 from users.jwt_decorators import jwt_required
 
-# finance get list of approved request
 from django.views.decorators.http import require_GET
 
 import base64, os, qrcode, logging
@@ -27,15 +26,24 @@ MEDIA_QR_PATH = "qr_codes/"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HELPER — update asset stock status
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _update_asset_status(asset):
+    """Set asset status based on available_quantity. Call before asset.save()."""
+    if asset.available_quantity <= 0:
+        asset.status = "OUT_OF_STOCK"
+    elif asset.available_quantity <= asset.minimum_stock_level:
+        asset.status = "LOW_STOCK"
+    else:
+        asset.status = "AVAILABLE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PAGINATION HELPER — default page=1, limit=10
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _paginate(request, data):
-    """
-    Pagination helper. Default: page=1, limit=10.
-    If frontend sends no params → returns page 1 with 10 records automatically.
-    Usage: ?page=1&limit=10
-    """
     try:
         page  = max(1, int(request.GET.get("page",  1)))
         limit = max(1, int(request.GET.get("limit", 10)))
@@ -84,52 +92,63 @@ def add_inventory(request):
     try:
         total_qty     = int(data.get("total_quantity", 1))
         minimum_stock = int(data.get("minimum_stock_level", 0))
-        available_qty = int(data.get("available_quantity", total_qty))
+        # ✅ available always = total on creation, quantity_issued always = 0
+        available_qty = total_qty
     except ValueError:
         return JsonResponse({"error": "Quantity fields must be integers."}, status=400)
 
+    # ✅ Set status based on quantities before saving
+    if available_qty <= 0:
+        initial_status = "OUT_OF_STOCK"
+    elif available_qty <= minimum_stock:
+        initial_status = "LOW_STOCK"
+    else:
+        initial_status = "AVAILABLE"
+
     try:
         asset = Asset.objects.create(
-            asset_tag           = data.get("asset_tag"),
-            serial_number       = data.get("serial_number"),
-            model_number        = data.get("model_number"),
-            brand               = data.get("brand"),
-            model_name          = data.get("model_name"),
-            category            = data.get("category"),
-            type                = data.get("type"),
-            total_quantity      = total_qty,
-            available_quantity  = available_qty,
-            minimum_stock_level = minimum_stock,
-            processor           = data.get("processor"),
-            processor_generation= data.get("processor_generation"),
-            ram_size            = data.get("ram_size"),
-            ram_type            = data.get("ram_type"),
-            storage_type        = data.get("storage_type"),
-            storage_capacity    = data.get("storage_capacity"),
-            graphics_card       = data.get("graphics_card"),
-            battery_health      = data.get("battery_health"),
-            os_installed        = data.get("os_installed"),
-            screen_size_inch    = data.get("screen_size_inch") or None,
-            resolution          = data.get("resolution"),
-            panel_type          = data.get("panel_type"),
-            touchscreen         = str_to_bool(data.get("touchscreen")),
-            curved_screen       = str_to_bool(data.get("curved_screen")),
-            input_ports         = data.get("input_ports"),
-            usb_hub_available   = str_to_bool(data.get("usb_hub_available")),
-            speakers_available  = str_to_bool(data.get("speakers_available")),
-            connectivity_type   = data.get("connectivity_type"),
-            purchase_date       = data.get("purchase_date"),
-            purchase_price      = data.get("purchase_price"),
-            vendor              = Vendor.objects.filter(name=data.get("vendor_name")).first() if data.get("vendor_name") else None,
-            invoice_number      = data.get("invoice_number"),
-            warranty_start      = data.get("warranty_start"),
-            warranty_end        = data.get("warranty_end"),
-            warranty_status     = data.get("warranty_status"),
-            condition           = data.get("condition") or "NEW",
-            current_location    = data.get("current_location"),
-            remarks             = data.get("remarks"),
-            attachment          = attachment,
-            warranty_documents  = warranty_docs,
+            asset_tag            = data.get("asset_tag"),
+            serial_number        = data.get("serial_number"),
+            model_number         = data.get("model_number"),
+            brand                = data.get("brand"),
+            model_name           = data.get("model_name"),
+            category             = data.get("category"),
+            type                 = data.get("type"),
+            total_quantity       = total_qty,
+            available_quantity   = available_qty,
+            quantity_issued      = 0,              # ✅ always 0 on creation
+            minimum_stock_level  = minimum_stock,
+            status               = initial_status, # ✅ set before save
+            processor            = data.get("processor"),
+            processor_generation = data.get("processor_generation"),
+            ram_size             = data.get("ram_size"),
+            ram_type             = data.get("ram_type"),
+            storage_type         = data.get("storage_type"),
+            storage_capacity     = data.get("storage_capacity"),
+            graphics_card        = data.get("graphics_card"),
+            battery_health       = data.get("battery_health"),
+            os_installed         = data.get("os_installed"),
+            screen_size_inch     = data.get("screen_size_inch") or None,
+            resolution           = data.get("resolution"),
+            panel_type           = data.get("panel_type"),
+            touchscreen          = str_to_bool(data.get("touchscreen")),
+            curved_screen        = str_to_bool(data.get("curved_screen")),
+            input_ports          = data.get("input_ports"),
+            usb_hub_available    = str_to_bool(data.get("usb_hub_available")),
+            speakers_available   = str_to_bool(data.get("speakers_available")),
+            connectivity_type    = data.get("connectivity_type"),
+            purchase_date        = data.get("purchase_date"),
+            purchase_price       = data.get("purchase_price"),
+            vendor               = Vendor.objects.filter(name=data.get("vendor_name")).first() if data.get("vendor_name") else None,
+            invoice_number       = data.get("invoice_number"),
+            warranty_start       = data.get("warranty_start"),
+            warranty_end         = data.get("warranty_end"),
+            warranty_status      = data.get("warranty_status"),
+            condition            = data.get("condition") or "NEW",
+            current_location     = data.get("current_location"),
+            remarks              = data.get("remarks"),
+            attachment           = attachment,
+            warranty_documents   = warranty_docs,
         )
 
         # Assign to user if provided
@@ -163,6 +182,10 @@ def add_inventory(request):
             "message":            "Asset added successfully",
             "asset_id":           asset.id,
             "asset_tag":          asset.asset_tag,
+            "total_quantity":     asset.total_quantity,
+            "available_quantity": asset.available_quantity,
+            "quantity_issued":    asset.quantity_issued,
+            "status":             asset.status,
             "assigned_to_id":     asset.assigned_to.id if asset.assigned_to else None,
             "qr_code_path":       asset.barcode_qr_code,
             "qr_url":             qr_url,
@@ -200,9 +223,9 @@ def update_inventory(request):
         return JsonResponse({"error": "Asset not found"}, status=404)
 
     new_total_quantity = data.get("total_quantity", asset.total_quantity)
-    if new_total_quantity < asset.issued_quantity:
+    if new_total_quantity < asset.quantity_issued:
         return JsonResponse({
-            "error": f"Total quantity ({new_total_quantity}) cannot be less than issued quantity ({asset.issued_quantity})"
+            "error": f"Total quantity ({new_total_quantity}) cannot be less than issued quantity ({asset.quantity_issued})"
         }, status=400)
     if new_total_quantity < 0:
         return JsonResponse({"error": "Total quantity cannot be negative"}, status=400)
@@ -214,19 +237,14 @@ def update_inventory(request):
     asset.type                = data.get("type",                asset.type)
     asset.barcode_qr_code     = data.get("barcode_qr_code",     asset.barcode_qr_code)
     asset.total_quantity      = new_total_quantity
-    asset.available_quantity  = new_total_quantity - asset.issued_quantity
+    asset.available_quantity  = new_total_quantity - asset.quantity_issued
     asset.minimum_stock_level = data.get("minimum_stock_level", asset.minimum_stock_level)
+    asset.purchase_date       = data.get("purchase_date",       asset.purchase_date)
+    asset.purchase_price      = data.get("purchase_price",      asset.purchase_price)
+    asset.invoice_number      = data.get("invoice_number",      asset.invoice_number)
 
-    if asset.available_quantity == 0:
-        asset.status = "OUT_OF_STOCK"
-    elif asset.available_quantity <= asset.minimum_stock_level:
-        asset.status = "LOW_STOCK"
-    else:
-        asset.status = "AVAILABLE"
-
-    asset.purchase_date  = data.get("purchase_date",  asset.purchase_date)
-    asset.purchase_price = data.get("purchase_price", asset.purchase_price)
-    asset.invoice_number = data.get("invoice_number", asset.invoice_number)
+    # ✅ Update status from views
+    _update_asset_status(asset)
     asset.save()
 
     return JsonResponse({
@@ -234,7 +252,7 @@ def update_inventory(request):
         "asset_id":           asset.id,
         "total_quantity":     asset.total_quantity,
         "available_quantity": asset.available_quantity,
-        "issued_quantity":    asset.issued_quantity,
+        "quantity_issued":    asset.quantity_issued,
         "status":             asset.status,
     })
 
@@ -263,7 +281,7 @@ def delete_inventory(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST ALL ASSETS — ✅ PAGINATED (default page=1, limit=10)
+# LIST ALL ASSETS — ✅ PAGINATED + FILTERED
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -271,20 +289,16 @@ def delete_inventory(request):
 def list_inventory(request):
     from django.db.models import Q
 
-    assets = Asset.objects.select_related("vendor", "assigned_to").all()
-
-    # ── Filter by category ────────────────────────────────────────────────────
+    assets   = Asset.objects.select_related("vendor", "assigned_to").all()
     category = request.GET.get("category")
+    status   = request.GET.get("status")
+    search   = request.GET.get("search")
+    issued   = request.GET.get("issued")
+
     if category:
         assets = assets.filter(category__iexact=category)
-
-    # ── Filter by status ──────────────────────────────────────────────────────
-    status = request.GET.get("status")
     if status:
         assets = assets.filter(status__iexact=status)
-
-    # ── Search by serial_number, asset_tag, model_name, brand ────────────────
-    search = request.GET.get("search")
     if search:
         assets = assets.filter(
             Q(serial_number__icontains=search) |
@@ -292,16 +306,12 @@ def list_inventory(request):
             Q(model_name__icontains=search)    |
             Q(brand__icontains=search)
         )
-
-    # ── Filter by issued (true = only issued, false = only not issued) ────────
-    issued = request.GET.get("issued")
     if issued is not None:
         if issued.lower() == "true":
-            assets = assets.filter(issued_quantity__gt=0)
+            assets = assets.filter(quantity_issued__gt=0)
         elif issued.lower() == "false":
-            assets = assets.filter(issued_quantity=0)
+            assets = assets.filter(quantity_issued=0)
 
-    # ── Build rows ────────────────────────────────────────────────────────────
     assets_list = []
     for a in assets:
         assets_list.append({
@@ -315,7 +325,7 @@ def list_inventory(request):
             "condition":           a.condition or "",
             "total_quantity":      a.total_quantity,
             "available_quantity":  a.available_quantity,
-            "issued_quantity":     a.issued_quantity,
+            "quantity_issued":     a.quantity_issued,
             "minimum_stock_level": a.minimum_stock_level,
             "purchase_date":       a.purchase_date.isoformat() if a.purchase_date else "",
             "purchase_price":      float(a.purchase_price) if a.purchase_price else "",
@@ -345,8 +355,9 @@ def list_inventory(request):
         "assets": paginated["data"],
     })
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# ISSUE ASSET
+# ISSUE ASSET — ✅ ALL quantity logic handled here
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -382,37 +393,47 @@ def issue_inventory(request):
         if asset.available_quantity < quantity_issued:
             return JsonResponse({"error": "Not enough stock available"}, status=400)
 
-        if asset.available_quantity == 0:
-            asset.status = "OUT_OF_STOCK"
-        elif asset.available_quantity <= asset.minimum_stock_level:
-            asset.status = "LOW_STOCK"
-        else:
-            asset.status = "AVAILABLE"
+        # ✅ Update quantities in view only
+        asset.available_quantity -= quantity_issued
+        asset.quantity_issued    += quantity_issued
 
-        asset.save()
+        # ✅ Update status in view
+        _update_asset_status(asset)
 
+        asset.save(update_fields=[
+            "available_quantity",
+            "quantity_issued",
+            "status",
+            "updated_at",
+        ])
+
+        # Create issue record — model save() does nothing now
         asset_detail = AssetDetails.objects.create(
-            asset        = asset,
-            user         = employee,
+            asset           = asset,
+            user            = employee,
             quantity_issued = quantity_issued,
-            issued_by    = issued_by,
-            issue_date   = issue_date,
-            location     = location,
-            issue_reason = issue_reason,
-            remarks      = remarks,
-            status       = "ISSUED",
+            issued_by       = issued_by,
+            issue_date      = issue_date,
+            location        = location,
+            issue_reason    = issue_reason,
+            remarks         = remarks,
+            status          = "ISSUED",
         )
 
         return JsonResponse({
-            "message":       "Asset issued successfully",
-            "asset_id":      asset.id,
-            "employee_id":   employee.id,
-            "issued_by":     issued_by.id,
-            "quantity_issued": asset_detail.quantity_issued,
-            "issue_date":    asset_detail.issue_date,
-            "location":      asset_detail.location,
-            "issue_reason":  asset_detail.issue_reason,
-            "remarks":       asset_detail.remarks,
+            "message":               "Asset issued successfully",
+            "asset_id":              asset.id,
+            "employee_id":           employee.id,
+            "issued_by":             issued_by.id,
+            "quantity_issued":       asset_detail.quantity_issued,
+            "available_quantity":    asset.available_quantity,
+            "total_quantity":        asset.total_quantity,
+            "quantity_issued_total": asset.quantity_issued,
+            "issue_date":            asset_detail.issue_date,
+            "location":              asset_detail.location,
+            "issue_reason":          asset_detail.issue_reason,
+            "remarks":               asset_detail.remarks,
+            "status":                asset.status,
         }, status=201)
 
     except Asset.DoesNotExist:
@@ -424,7 +445,7 @@ def issue_inventory(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST ASSET DETAILS — ✅ PAGINATED (default page=1, limit=10)
+# LIST ASSET DETAILS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -471,7 +492,7 @@ def list_assets(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET EMPLOYEE ASSETS — ✅ PAGINATED (default page=1, limit=10)
+# GET EMPLOYEE ASSETS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -490,45 +511,45 @@ def get_employee_assets(request, employee_id):
     assigned_assets = Asset.objects.filter(assigned_to=employee)
     for asset in assigned_assets:
         data.append({
-            "asset_id":       asset.id,
-            "asset_tag":      asset.asset_tag,
-            "brand":          asset.brand,
-            "model_name":     asset.model_name,
-            "category":       asset.category,
-            "quantity_issued":None,
-            "status":         "ASSIGNED",
-            "issued_date":    None,
-            "return_date":    None,
-            "issued_by":      None,
+            "asset_id":        asset.id,
+            "asset_tag":       asset.asset_tag,
+            "brand":           asset.brand,
+            "model_name":      asset.model_name,
+            "category":        asset.category,
+            "quantity_issued": None,
+            "status":          "ASSIGNED",
+            "issued_date":     None,
+            "return_date":     None,
+            "issued_by":       None,
         })
 
     issued_records = AssetDetails.objects.select_related("asset", "issued_by").filter(user=employee)
     for record in issued_records:
         asset = record.asset
         data.append({
-            "asset_id":       asset.id,
-            "asset_tag":      asset.asset_tag,
-            "brand":          asset.brand,
-            "model_name":     asset.model_name,
-            "category":       asset.category,
-            "quantity_issued":record.quantity_issued,
-            "status":         record.status,
-            "issued_date":    record.created_at.isoformat(),
-            "return_date":    record.return_date.isoformat() if record.return_date else None,
-            "issued_by":      record.issued_by.name if record.issued_by else None,
+            "asset_id":        asset.id,
+            "asset_tag":       asset.asset_tag,
+            "brand":           asset.brand,
+            "model_name":      asset.model_name,
+            "category":        asset.category,
+            "quantity_issued": record.quantity_issued,
+            "status":          record.status,
+            "issued_date":     record.created_at.isoformat(),
+            "return_date":     record.return_date.isoformat() if record.return_date else None,
+            "issued_by":       record.issued_by.name if record.issued_by else None,
         })
 
     paginated = _paginate(request, data)
     return JsonResponse({
-        "employee_id":  employee.id,
-        "employee_name":employee.name,
-        "total":        paginated["total"],
-        "total_pages":  paginated["total_pages"],
-        "page":         paginated["page"],
-        "limit":        paginated["limit"],
-        "has_next":     paginated["has_next"],
-        "has_prev":     paginated["has_prev"],
-        "assets":       paginated["data"],
+        "employee_id":   employee.id,
+        "employee_name": employee.name,
+        "total":         paginated["total"],
+        "total_pages":   paginated["total_pages"],
+        "page":          paginated["page"],
+        "limit":         paginated["limit"],
+        "has_next":      paginated["has_next"],
+        "has_prev":      paginated["has_prev"],
+        "assets":        paginated["data"],
     })
 
 
@@ -543,37 +564,34 @@ def get_inventory_assets(request, inventory_id):
         return JsonResponse({"error": "GET method required"}, status=405)
 
     try:
-        inventory = Inventory.objects.get(id=inventory_id)
-    except Inventory.DoesNotExist:
-        return JsonResponse({"error": "Inventory not found"}, status=404)
+        inventory = Asset.objects.get(id=inventory_id)
+    except Asset.DoesNotExist:
+        return JsonResponse({"error": "Asset not found"}, status=404)
 
-    assets      = AssetDetails.objects.select_related("user", "issued_by").filter(inventory=inventory)
+    assets      = AssetDetails.objects.select_related("user", "issued_by").filter(asset=inventory)
     assets_list = []
 
     for asset in assets:
         assets_list.append({
-            "id":                   asset.id,
-            "employee_id":          asset.user.id,
-            "employee_name":        asset.user.name,
-            "employee_email":       asset.user.email,
-            "quantity_issued":      asset.quantity_issued,
-            "quantity_issued_date": asset.quantity_issued_date.isoformat(),
-            "return_date":          asset.return_date.isoformat() if asset.return_date else None,
-            "status":               asset.status,
-            "remarks":              asset.remarks,
-            "issued_by_id":         asset.issued_by.id,
-            "issued_by_name":       asset.issued_by.name,
-            "created_at":           asset.created_at.isoformat(),
-            "updated_at":           asset.updated_at.isoformat(),
+            "id":              asset.id,
+            "employee_id":     asset.user.id,
+            "employee_name":   asset.user.name,
+            "employee_email":  asset.user.email,
+            "quantity_issued": asset.quantity_issued,
+            "return_date":     asset.return_date.isoformat() if asset.return_date else None,
+            "status":          asset.status,
+            "remarks":         asset.remarks,
+            "issued_by_id":    asset.issued_by.id if asset.issued_by else None,
+            "issued_by_name":  asset.issued_by.name if asset.issued_by else "",
+            "created_at":      asset.created_at.isoformat(),
+            "updated_at":      asset.updated_at.isoformat(),
         })
 
     return JsonResponse({
-        "inventory_id":   inventory.id,
-        "inventory_name": inventory.item_name,
-        "inventory_code": inventory.item_code,
-        "total_issued":   inventory.issued_quantity,
-        "total_assets":   len(assets_list),
-        "assets":         assets_list,
+        "asset_id":     inventory.id,
+        "asset_tag":    inventory.asset_tag,
+        "total_assets": len(assets_list),
+        "assets":       assets_list,
     }, safe=False)
 
 
@@ -588,43 +606,42 @@ def get_asset_detail(request, asset_id):
         return JsonResponse({"error": "GET method required"}, status=405)
 
     try:
-        asset = AssetDetails.objects.select_related("asset", "user", "issued_by").get(id=asset_id)
+        record = AssetDetails.objects.select_related("asset", "user", "issued_by").get(id=asset_id)
     except AssetDetails.DoesNotExist:
-        return JsonResponse({"error": "Asset not found"}, status=404)
+        return JsonResponse({"error": "Asset detail not found"}, status=404)
 
     return JsonResponse({
-        "id": asset.id,
-        "inventory": {
-            "id":       asset.inventory.id,
-            "name":     asset.inventory.item_name,
-            "code":     asset.inventory.item_code,
-            "brand":    asset.inventory.brand,
-            "model":    asset.inventory.model,
-            "category": asset.inventory.category,
+        "id":             record.id,
+        "asset": {
+            "id":       record.asset.id if record.asset else None,
+            "tag":      record.asset.asset_tag if record.asset else "",
+            "brand":    record.asset.brand if record.asset else "",
+            "model":    record.asset.model_name if record.asset else "",
+            "category": record.asset.category if record.asset else "",
         },
         "employee": {
-            "id":    asset.user.id,
-            "name":  asset.user.name,
-            "email": asset.user.email,
-            "role":  asset.user.role,
+            "id":    record.user.id,
+            "name":  record.user.name,
+            "email": record.user.email,
+            "role":  record.user.role,
         },
-        "quantity_issued":      asset.quantity_issued,
-        "quantity_issued_date": asset.quantity_issued_date.isoformat(),
-        "return_date":          asset.return_date.isoformat() if asset.return_date else None,
-        "status":               asset.status,
-        "remarks":              asset.remarks,
+        "quantity_issued": record.quantity_issued,
+        "issue_date":      record.issue_date.isoformat() if record.issue_date else None,
+        "return_date":     record.return_date.isoformat() if record.return_date else None,
+        "status":          record.status,
+        "remarks":         record.remarks,
         "issued_by": {
-            "id":    asset.issued_by.id,
-            "name":  asset.issued_by.name,
-            "email": asset.issued_by.email,
+            "id":    record.issued_by.id if record.issued_by else None,
+            "name":  record.issued_by.name if record.issued_by else "",
+            "email": record.issued_by.email if record.issued_by else "",
         },
-        "created_at": asset.created_at.isoformat(),
-        "updated_at": asset.updated_at.isoformat(),
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
     })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RETURN SINGLE ASSET
+# RETURN SINGLE ASSET — ✅ ALL quantity logic handled here
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -637,50 +654,107 @@ def return_asset(request):
     try:
         data            = json.loads(request.body)
         asset_detail_id = data.get("asset_id")
-        status          = data.get("status", "RETURNED")
         remarks         = data.get("remarks", "")
 
-        if status not in ["RETURNED", "DAMAGED"]:
-            return JsonResponse({"error": "status must be RETURNED or DAMAGED"}, status=400)
+        # ✅ Get quantities from request
+        quantity_returned = int(data.get("quantity_returned", 0))
+        quantity_damaged  = int(data.get("quantity_damaged",  0))
+        quantity_lost     = int(data.get("quantity_lost",     0))
 
-        asset_detail = AssetDetails.objects.select_for_update().select_related("asset").get(id=asset_detail_id)
-        asset        = asset_detail.asset
+        # ✅ Validate at least one quantity provided
+        total_action = quantity_returned + quantity_damaged + quantity_lost
+        if total_action <= 0:
+            return JsonResponse({
+                "error": "Provide at least one of: quantity_returned, quantity_damaged, quantity_lost"
+            }, status=400)
 
-        if asset_detail.status in ["RETURNED", "DAMAGED"]:
-            return JsonResponse({"message": "Asset already closed", "asset_id": asset_detail.id}, status=200)
+        # ✅ FIXED: of=("self",) prevents nullable outer join error
+        asset_detail = AssetDetails.objects.select_for_update(
+            of=("self",)
+        ).select_related("asset").get(id=asset_detail_id)
 
-        asset_detail.status      = status
+        asset = asset_detail.asset
+
+        # ✅ Prevent double return
+        if asset_detail.status in ["RETURNED", "DAMAGED", "LOST"]:
+            return JsonResponse({
+                "message":  "Asset already closed",
+                "asset_id": asset_detail.id
+            }, status=200)
+
+        # ✅ Validate total doesn't exceed issued quantity
+        if total_action > asset_detail.quantity_issued:
+            return JsonResponse({
+                "error": f"Total quantities ({total_action}) exceed issued quantity ({asset_detail.quantity_issued})"
+            }, status=400)
+
+        # ✅ RETURNED — reusable, add back to available
+        if quantity_returned > 0:
+            asset.available_quantity += quantity_returned
+            asset.quantity_issued    -= quantity_returned
+
+        # ✅ DAMAGED — gone forever, remove from total
+        if quantity_damaged > 0:
+            asset.total_quantity  -= quantity_damaged
+            asset.quantity_issued -= quantity_damaged
+
+        # ✅ LOST — gone forever, remove from total
+        if quantity_lost > 0:
+            asset.total_quantity  -= quantity_lost
+            asset.quantity_issued -= quantity_lost
+
+        # ✅ Determine final status of this issue record
+        if quantity_returned > 0 and (quantity_damaged > 0 or quantity_lost > 0):
+            final_status = "PARTIAL_RETURN"
+        elif quantity_damaged > 0 and quantity_lost == 0 and quantity_returned == 0:
+            final_status = "DAMAGED"
+        elif quantity_lost > 0 and quantity_damaged == 0 and quantity_returned == 0:
+            final_status = "LOST"
+        else:
+            final_status = "RETURNED"
+
+        # ✅ Update asset detail record
+        asset_detail.status      = final_status
         asset_detail.return_date = timezone.now()
         if remarks:
             asset_detail.remarks = remarks
-        asset_detail.save(update_fields=["status", "return_date", "remarks", "updated_at"])
+        asset_detail.save(update_fields=[
+            "status", "return_date", "remarks", "updated_at"
+        ])
 
-        if status == "RETURNED":
-            asset.available_quantity += asset_detail.quantity_issued
-            asset.issued_quantity    -= asset_detail.quantity_issued
-            if asset.available_quantity == 0:
-                asset.status = "OUT_OF_STOCK"
-            elif asset.available_quantity <= asset.minimum_stock_level:
-                asset.status = "LOW_STOCK"
-            else:
-                asset.status = "AVAILABLE"
-            asset.save(update_fields=["available_quantity", "issued_quantity", "status", "updated_at"])
+        # ✅ Always update status after quantity change
+        _update_asset_status(asset)
+        asset.save(update_fields=[
+            "available_quantity",
+            "quantity_issued",
+            "total_quantity",
+            "status",
+            "updated_at",
+        ])
 
         return JsonResponse({
-            "message":                  f"Asset marked as {status}",
+            "message":                  f"Asset return processed successfully",
             "asset_id":                 asset_detail.id,
+            "final_status":             final_status,
+            "quantity_returned":        quantity_returned,
+            "quantity_damaged":         quantity_damaged,
+            "quantity_lost":            quantity_lost,
+            "remarks":                  remarks,
             "asset_total_quantity":     asset.total_quantity,
             "asset_available_quantity": asset.available_quantity,
+            "asset_quantity_issued":    asset.quantity_issued,
+            "asset_status":             asset.status,
         }, status=200)
 
     except AssetDetails.DoesNotExist:
         return JsonResponse({"error": "Asset detail not found"}, status=404)
     except Asset.DoesNotExist:
         return JsonResponse({"error": "Asset not found"}, status=404)
-
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RETURN ALL ASSETS FOR EMPLOYEE
+# RETURN ALL ASSETS FOR EMPLOYEE — ✅ ALL quantity logic handled here
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -701,26 +775,26 @@ def return_all_employee_assets(request, employee_id):
 
     returned_ids = []
     for ad in assets:
-        asset          = ad.asset
+        asset = ad.asset
+
+        # Update asset detail
         ad.status      = "RETURNED"
         ad.return_date = timezone.now()
         ad.save(update_fields=["status", "return_date", "updated_at"])
 
+        # ✅ Update quantities in view only
         asset.available_quantity += ad.quantity_issued
-        asset.issued_quantity    -= ad.quantity_issued
-        if asset.available_quantity == 0:
-            asset.status = "OUT_OF_STOCK"
-        elif asset.available_quantity <= asset.minimum_stock_level:
-            asset.status = "LOW_STOCK"
-        else:
-            asset.status = "AVAILABLE"
-        asset.save(update_fields=["available_quantity", "issued_quantity", "status", "updated_at"])
+        asset.quantity_issued    -= ad.quantity_issued
+        _update_asset_status(asset)
+        asset.save(update_fields=[
+            "available_quantity", "quantity_issued", "status", "updated_at"
+        ])
         returned_ids.append(ad.id)
 
     return JsonResponse({
-        "message":             f"All assets returned for employee {employee.name}",
-        "employee_id":         employee.id,
-        "returned_asset_ids":  returned_ids,
+        "message":            f"All assets returned for employee {employee.name}",
+        "employee_id":        employee.id,
+        "returned_asset_ids": returned_ids,
     }, status=200)
 
 
@@ -793,19 +867,15 @@ def create_purchase_request(request):
 def finance_approve_request(request, request_id):
     try:
         pr = PurchaseRequest.objects.get(id=request_id)
-
         if pr.status != "PENDING_FINANCE":
             return JsonResponse({"error": "Request is not pending finance approval"}, status=400)
-
         pr.status = "APPROVED_FINANCE"
         pr.save(update_fields=["status"])
-
         return JsonResponse({
             "message":    "Finance approved successfully",
             "request_id": pr.id,
             "next_step":  "HR approval required",
         })
-
     except PurchaseRequest.DoesNotExist:
         return JsonResponse({"error": "Purchase request not found"}, status=404)
 
@@ -819,25 +889,21 @@ def finance_approve_request(request, request_id):
 def hr_approve_request(request, request_id):
     try:
         pr = PurchaseRequest.objects.get(id=request_id)
-
         if pr.status != "APPROVED_FINANCE":
             return JsonResponse({"error": "Finance approval pending"}, status=400)
-
         pr.status = "APPROVED_HR"
         pr.save(update_fields=["status"])
-
         return JsonResponse({
             "message":    "HR approved successfully",
             "request_id": pr.id,
             "next_step":  "Order can be placed now",
         })
-
     except PurchaseRequest.DoesNotExist:
         return JsonResponse({"error": "Purchase request not found"}, status=404)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FINANCE MARK AS PURCHASED
+# FINANCE MARK AS PURCHASED — ✅ quantity logic handled here
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -848,7 +914,6 @@ def finance_mark_as_purchased(request, request_id):
 
     try:
         pr = PurchaseRequest.objects.get(id=request_id)
-
         if pr.status != "APPROVED_HR":
             return JsonResponse({"error": "HR approval pending or invalid status"}, status=400)
 
@@ -865,15 +930,11 @@ def finance_mark_as_purchased(request, request_id):
         if invoice_file:
             pr.invoice_attachment = invoice_file
 
-        asset                    = pr.asset
-        asset.total_quantity    += purchased_quantity
+        # ✅ Update quantities in view
+        asset                     = pr.asset
+        asset.total_quantity     += purchased_quantity
         asset.available_quantity += purchased_quantity
-        if asset.available_quantity == 0:
-            asset.status = "OUT_OF_STOCK"
-        elif asset.available_quantity <= asset.minimum_stock_level:
-            asset.status = "LOW_STOCK"
-        else:
-            asset.status = "AVAILABLE"
+        _update_asset_status(asset)
         asset.save(update_fields=["total_quantity", "available_quantity", "status"])
 
         pr.status = "ORDER_PLACED"
@@ -896,7 +957,7 @@ def finance_mark_as_purchased(request, request_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST PURCHASE REQUESTS — ✅ PAGINATED (default page=1, limit=10)
+# LIST PURCHASE REQUESTS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -959,13 +1020,12 @@ def add_vendor(request):
             "message":   "Vendor added successfully",
             "vendor_id": vendor.id,
         }, status=201)
-
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIST VENDORS — ✅ PAGINATED (default page=1, limit=10)
+# LIST VENDORS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -1016,14 +1076,12 @@ def edit_vendor(request, vendor_id):
 
     try:
         data = json.loads(request.body)
-
         if "name"           in data: vendor.name           = data["name"]
         if "address"        in data: vendor.address        = data["address"]
         if "contact_person" in data: vendor.contact_person = data["contact_person"]
         if "phone"          in data: vendor.phone          = data["phone"]
         if "email"          in data: vendor.email          = data["email"]
         if "gst_number"     in data: vendor.gst_number     = data["gst_number"]
-
         vendor.save()
 
         return JsonResponse({
@@ -1036,7 +1094,6 @@ def edit_vendor(request, vendor_id):
             "email":          vendor.email,
             "gst_number":     vendor.gst_number,
         }, status=200)
-
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
 
@@ -1064,7 +1121,6 @@ def delete_vendor(request, vendor_id):
 
     vendor_name = vendor.name
     vendor.delete()
-
     return JsonResponse({
         "message":   f"Vendor '{vendor_name}' deleted successfully",
         "vendor_id": vendor_id,
