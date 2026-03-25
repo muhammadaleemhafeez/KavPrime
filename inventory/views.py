@@ -454,63 +454,9 @@ def list_assets(request):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
 
-    from django.db.models import Q
-
-    # ✅ Get all filters from query params
-    search       = request.GET.get("search")
-    status       = request.GET.get("status")
-    employee_id  = request.GET.get("employee_id")
-    asset_id     = request.GET.get("asset_id")
-    category     = request.GET.get("category")
-    from_date    = request.GET.get("from_date")
-    to_date      = request.GET.get("to_date")
-    issued_by_id = request.GET.get("issued_by_id")
-
-    assets = AssetDetails.objects.select_related(
-        "asset", "user", "issued_by"
-    ).all()
-
-    # ✅ Filter by status
-    if status:
-        assets = assets.filter(status__iexact=status)
-
-    # ✅ Filter by employee
-    if employee_id:
-        assets = assets.filter(user__id=employee_id)
-
-    # ✅ Filter by specific asset
-    if asset_id:
-        assets = assets.filter(asset__id=asset_id)
-
-    # ✅ Filter by category
-    if category:
-        assets = assets.filter(asset__category__iexact=category)
-
-    # ✅ Filter by issued_by
-    if issued_by_id:
-        assets = assets.filter(issued_by__id=issued_by_id)
-
-    # ✅ Filter by date range
-    if from_date:
-        assets = assets.filter(issue_date__date__gte=from_date)
-    if to_date:
-        assets = assets.filter(issue_date__date__lte=to_date)
-
-    # ✅ Search across multiple fields
-    if search:
-        assets = assets.filter(
-            Q(asset__asset_tag__icontains=search)    |
-            Q(asset__brand__icontains=search)        |
-            Q(asset__model_name__icontains=search)   |
-            Q(asset__serial_number__icontains=search)|
-            Q(user__name__icontains=search)          |
-            Q(user__email__icontains=search)         |
-            Q(location__icontains=search)            |
-            Q(issue_reason__icontains=search)        |
-            Q(remarks__icontains=search)
-        )
-
+    assets      = AssetDetails.objects.select_related("asset", "user", "issued_by").all()
     assets_list = []
+
     for asset in assets:
         assets_list.append({
             "id":              asset.id,
@@ -519,16 +465,12 @@ def list_assets(request):
             "brand":           asset.asset.brand if asset.asset else "",
             "model_name":      asset.asset.model_name if asset.asset else "",
             "category":        asset.asset.category if asset.asset else "",
-            "serial_number":   asset.asset.serial_number if asset.asset else "",
             "employee_id":     asset.user.id,
             "employee_name":   asset.user.name,
             "employee_email":  asset.user.email,
             "quantity_issued": asset.quantity_issued,
-            "issue_date":      asset.issue_date.isoformat() if asset.issue_date else None,
             "issued_date":     asset.created_at.isoformat(),
             "return_date":     asset.return_date.isoformat() if asset.return_date else None,
-            "location":        asset.location or "",
-            "issue_reason":    asset.issue_reason or "",
             "status":          asset.status,
             "remarks":         asset.remarks or "",
             "issued_by_id":    asset.issued_by.id if asset.issued_by else None,
@@ -545,17 +487,7 @@ def list_assets(request):
         "limit":       paginated["limit"],
         "has_next":    paginated["has_next"],
         "has_prev":    paginated["has_prev"],
-        "filters_applied": {
-            "search":       search       or None,
-            "status":       status       or None,
-            "employee_id":  employee_id  or None,
-            "asset_id":     asset_id     or None,
-            "category":     category     or None,
-            "from_date":    from_date    or None,
-            "to_date":      to_date      or None,
-            "issued_by_id": issued_by_id or None,
-        },
-        "assets": paginated["data"],
+        "assets":      paginated["data"],
     })
 
 
