@@ -454,7 +454,11 @@ def list_assets(request):
     if request.method != "GET":
         return JsonResponse({"error": "GET method required"}, status=405)
 
-    assets      = AssetDetails.objects.select_related("asset", "user", "issued_by").all()
+    # ✅ By default show only ISSUED — filter by status if provided
+    status_filter = request.GET.get("status", "ISSUED")
+    assets = AssetDetails.objects.select_related("asset", "user", "issued_by").filter(
+        status__iexact=status_filter
+    )
     assets_list = []
 
     for asset in assets:

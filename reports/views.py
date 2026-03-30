@@ -655,9 +655,9 @@ def report_user_summary(request):
     users      = User.objects.all()
     by_role    = list(users.values("role").annotate(count=Count("id")))
     by_status  = list(users.values("employment_status").annotate(count=Count("id")))
-    active     = users.filter(employment_status="ACTIVE").count()
-    onboarding = users.filter(employment_status="ONBOARDING").count()
-    inactive   = users.filter(employment_status="EXITED").count()
+    active     = users.filter(employment_status__iexact="ACTIVE").count()
+    onboarding = users.filter(employment_status__iexact="ONBOARDING").count()
+    inactive   = users.filter(employment_status__iexact="EXITED").count()
 
     if _wants_csv(request):
         rows = []
