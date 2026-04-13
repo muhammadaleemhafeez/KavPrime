@@ -1035,13 +1035,59 @@ def add_vendor(request):
 # LIST VENDORS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
 
+# @csrf_exempt
+# @jwt_required
+# def list_vendors(request):
+#     if request.method != "GET":
+#         return JsonResponse({"error": "Only GET method allowed"}, status=405)
+
+#     vendors     = Vendor.objects.all()
+#     vendor_list = []
+#     for v in vendors:
+#         vendor_list.append({
+#             "id":             v.id,
+#             "name":           v.name,
+#             "address":        v.address,
+#             "contact_person": v.contact_person,
+#             "phone":          v.phone,
+#             "email":          v.email,
+#             "gst_number":     v.gst_number,
+#         })
+
+#     paginated = _paginate(request, vendor_list)
+#     return JsonResponse({
+#         "total":       paginated["total"],
+#         "total_pages": paginated["total_pages"],
+#         "page":        paginated["page"],
+#         "limit":       paginated["limit"],
+#         "has_next":    paginated["has_next"],
+#         "has_prev":    paginated["has_prev"],
+#         "vendors":     paginated["data"],
+#     }, status=200)
+
 @csrf_exempt
 @jwt_required
 def list_vendors(request):
     if request.method != "GET":
         return JsonResponse({"error": "Only GET method allowed"}, status=405)
 
-    vendors     = Vendor.objects.all()
+    from django.db.models import Q
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    search = request.GET.get("search")
+
+    vendors = Vendor.objects.all()
+
+    if search:
+        vendors = vendors.filter(
+            Q(name__icontains=search)           |
+            Q(contact_person__icontains=search) |
+            Q(phone__icontains=search)          |
+            Q(email__icontains=search)          |
+            Q(gst_number__icontains=search)     |
+            Q(address__icontains=search)
+        )
+
     vendor_list = []
     for v in vendors:
         vendor_list.append({
@@ -1062,6 +1108,7 @@ def list_vendors(request):
         "limit":       paginated["limit"],
         "has_next":    paginated["has_next"],
         "has_prev":    paginated["has_prev"],
+        "search":      search or None,
         "vendors":     paginated["data"],
     }, status=200)
 
