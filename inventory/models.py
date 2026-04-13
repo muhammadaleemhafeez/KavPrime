@@ -224,13 +224,39 @@ class PurchaseRequest(models.Model):
         return f"PR-{self.id} | {self.asset.asset_tag}"
 
 
+
 class Vendor(models.Model):
+
+    CATEGORY_CHOICES = [
+        ("IT",          "IT & Technology"),
+        ("FURNITURE",   "Furniture"),
+        ("ELECTRONICS", "Electronics"),
+        ("STATIONERY",  "Stationery"),
+        ("OTHER",       "Other"),
+    ]
+
+    STATUS_CHOICES = [
+        ("ACTIVE",   "Active"),
+        ("INACTIVE", "Inactive"),
+    ]
+
     name           = models.CharField(max_length=150)
     address        = models.TextField(null=True, blank=True)
     contact_person = models.CharField(max_length=150, null=True, blank=True)
     phone          = models.CharField(max_length=50,  null=True, blank=True)
     email          = models.CharField(max_length=150, null=True, blank=True)
     gst_number     = models.CharField(max_length=100, null=True, blank=True)
+    category       = models.CharField(
+        max_length=50,
+        choices=CATEGORY_CHOICES,
+        null=True, blank=True,
+        default="OTHER"
+    )
+    status         = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="ACTIVE"
+    )
     created_at     = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

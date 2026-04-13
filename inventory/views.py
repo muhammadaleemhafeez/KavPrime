@@ -1022,10 +1022,15 @@ def add_vendor(request):
             phone          = data.get("phone"),
             email          = data.get("email"),
             gst_number     = data.get("gst_number"),
+            category       = data.get("category", "OTHER"),
+            status         = data.get("status", "ACTIVE"),
         )
         return JsonResponse({
             "message":   "Vendor added successfully",
             "vendor_id": vendor.id,
+            "name":      vendor.name,
+            "category":  vendor.category,
+            "status":    vendor.status,
         }, status=201)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
@@ -1034,36 +1039,6 @@ def add_vendor(request):
 # ─────────────────────────────────────────────────────────────────────────────
 # LIST VENDORS — ✅ PAGINATED
 # ─────────────────────────────────────────────────────────────────────────────
-
-# @csrf_exempt
-# @jwt_required
-# def list_vendors(request):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "Only GET method allowed"}, status=405)
-
-#     vendors     = Vendor.objects.all()
-#     vendor_list = []
-#     for v in vendors:
-#         vendor_list.append({
-#             "id":             v.id,
-#             "name":           v.name,
-#             "address":        v.address,
-#             "contact_person": v.contact_person,
-#             "phone":          v.phone,
-#             "email":          v.email,
-#             "gst_number":     v.gst_number,
-#         })
-
-#     paginated = _paginate(request, vendor_list)
-#     return JsonResponse({
-#         "total":       paginated["total"],
-#         "total_pages": paginated["total_pages"],
-#         "page":        paginated["page"],
-#         "limit":       paginated["limit"],
-#         "has_next":    paginated["has_next"],
-#         "has_prev":    paginated["has_prev"],
-#         "vendors":     paginated["data"],
-#     }, status=200)
 
 @csrf_exempt
 @jwt_required
@@ -1074,7 +1049,9 @@ def list_vendors(request):
     from django.db.models import Q
 
     # ── Filters ───────────────────────────────────────────────────────────────
-    search = request.GET.get("search")
+    search   = request.GET.get("search")
+    category = request.GET.get("category")
+    status   = request.GET.get("status")
 
     vendors = Vendor.objects.all()
 
@@ -1088,6 +1065,12 @@ def list_vendors(request):
             Q(address__icontains=search)
         )
 
+    if category:
+        vendors = vendors.filter(category__iexact=category)
+
+    if status:
+        vendors = vendors.filter(status__iexact=status)
+
     vendor_list = []
     for v in vendors:
         vendor_list.append({
@@ -1098,6 +1081,9 @@ def list_vendors(request):
             "phone":          v.phone,
             "email":          v.email,
             "gst_number":     v.gst_number,
+            "category":       v.category or "",
+            "status":         v.status,
+            "created_at":     v.created_at.isoformat(),
         })
 
     paginated = _paginate(request, vendor_list)
@@ -1108,7 +1094,11 @@ def list_vendors(request):
         "limit":       paginated["limit"],
         "has_next":    paginated["has_next"],
         "has_prev":    paginated["has_prev"],
-        "search":      search or None,
+        "filters_applied": {
+            "search":   search   or None,
+            "category": category or None,
+            "status":   status   or None,
+        },
         "vendors":     paginated["data"],
     }, status=200)
 
@@ -1136,6 +1126,8 @@ def edit_vendor(request, vendor_id):
         if "phone"          in data: vendor.phone          = data["phone"]
         if "email"          in data: vendor.email          = data["email"]
         if "gst_number"     in data: vendor.gst_number     = data["gst_number"]
+        if "category"       in data: vendor.category       = data["category"]
+        if "status"         in data: vendor.status         = data["status"]
         vendor.save()
 
         return JsonResponse({
@@ -1147,6 +1139,8 @@ def edit_vendor(request, vendor_id):
             "phone":          vendor.phone,
             "email":          vendor.email,
             "gst_number":     vendor.gst_number,
+            "category":       vendor.category,
+            "status":         vendor.status,
         }, status=200)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=400)
