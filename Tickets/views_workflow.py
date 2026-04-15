@@ -201,3 +201,198 @@ def create_workflow_with_roles(request):
         "is_active": wf.is_active,
         "roles": out_roles
     }, status=201)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EDIT WORKFLOW WITH ROLES
+# ─────────────────────────────────────────────────────────────────────────────
+
+@csrf_exempt
+@require_http_methods(["PUT"])
+@jwt_required
+def edit_workflow_with_roles(request, workflow_id):
+    """
+    Edit an existing workflow — update name, description, is_active and roles/steps.
+    PUT /api/workflows/<workflow_id>/edit/
+
+    Body example:
+    {
+        "workflow_name": "Updated Workflow",
+        "description":   "Updated description",
+        "is_active":     true,
+        "roles": [
+            {
+                "role": "EMPLOYEE",
+                "steps": [
+                    { "target_role": "TEAM_PMO",   "sla_hours": 4 },
+                    { "target_role": "SENIOR_PMO", "sla_hours": 3 }
+                ]
+            }
+        ]
+    }
+    Note: If roles are provided, ALL existing steps for this workflow
+          are deleted and replaced with the new ones.
+    """
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    # Fetch workflow
+    try:
+        wf = Workflow.objects.get(id=workflow_id)
+    except Workflow.DoesNotExist:
+        return JsonResponse({"error": f"Workflow #{workflow_id} not found"}, status=404)
+
+    roles_data = data.get("roles")
+
+    # Validate roles if provided
+    if roles_data is not None:
+        if not isinstance(roles_data, list) or len(roles_data) == 0:
+            return JsonResponse({"error": "roles must be a non-empty list"}, status=400)
+
+        for i, r in enumerate(roles_data, start=1):
+            main_role_name = (r.get("role") or "").strip()
+            if not main_role_name:
+                return JsonResponse({"error": f"Role {i}: role is required"}, status=400)
+
+            steps = r.get("steps")
+            if not steps or not isinstance(steps, list):
+                return JsonResponse({"error": f"Role {i} ({main_role_name}): steps must be a non-empty list"}, status=400)
+
+            for j, s in enumerate(steps, start=1):
+                target_role_name = (s.get("target_role") or "").strip()
+                if not target_role_name:
+                    return JsonResponse({
+                        "error": f"Role {i} ({main_role_name}) Step {j}: target_role is required"
+                    }, status=400)
+
+    with transaction.atomic():
+
+        # Update basic workflow fields if provided
+        if "workflow_name" in data:
+            wf.workflow_name = data["workflow_name"]
+        if "description" in data:
+            wf.description = data["description"]
+        if "is_active" in data:
+            wf.is_active = bool(data["is_active"])
+            # Deactivate other workflows of same ticket_type if activating
+            if wf.is_active:
+                Workflow.objects.filter(
+                    ticket_type=wf.ticket_type
+                ).exclude(id=wf.id).update(is_active=False)
+
+        wf.save()
+
+        out_roles = []
+
+        # If roles provided — delete old steps and recreate
+        if roles_data is not None:
+            WorkflowStep.objects.filter(workflow=wf).delete()
+
+            for r in roles_data:
+                main_role_name  = r["role"].strip()
+                main_role_obj, _ = Role.objects.get_or_create(name=main_role_name)
+
+                role_steps      = []
+                role_step_order = 1
+
+                for s in r["steps"]:
+                    target_role_name  = s["target_role"].strip()
+                    target_role_obj, _ = Role.objects.get_or_create(name=target_role_name)
+                    sla = int(s.get("sla_hours", 4))
+
+                    step = WorkflowStep.objects.create(
+                        workflow    = wf,
+                        step_order  = role_step_order,
+                        role        = main_role_obj,
+                        target_role = target_role_obj,
+                        sla_hours   = sla,
+                    )
+                    role_step_order += 1
+
+                    role_steps.append({
+                        "step_order":  step.step_order,
+                        "target_role": step.target_role.name,
+                        "sla_hours":   step.sla_hours,
+                    })
+
+                out_roles.append({
+                    "role":  main_role_obj.name,
+                    "steps": role_steps,
+                })
+
+        else:
+            # Return existing steps if no new roles provided
+            steps_qs = WorkflowStep.objects.filter(
+                workflow=wf
+            ).select_related("role", "target_role").order_by("role", "step_order")
+
+            roles_dict = {}
+            for s in steps_qs:
+                rname = s.role.name
+                if rname not in roles_dict:
+                    roles_dict[rname] = []
+                roles_dict[rname].append({
+                    "step_order":  s.step_order,
+                    "target_role": s.target_role.name if s.target_role else None,
+                    "sla_hours":   s.sla_hours,
+                })
+            out_roles = [{"role": r, "steps": steps} for r, steps in roles_dict.items()]
+
+    return JsonResponse({
+        "message":       f"Workflow #{wf.id} updated successfully",
+        "workflow_id":   wf.id,
+        "ticket_type":   wf.ticket_type,
+        "version":       wf.version,
+        "workflow_name": wf.workflow_name,
+        "description":   wf.description,
+        "is_active":     wf.is_active,
+        "roles":         out_roles,
+    }, status=200)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE WORKFLOW
+# ─────────────────────────────────────────────────────────────────────────────
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@jwt_required
+def delete_workflow(request, workflow_id):
+    """
+    Delete a workflow and all its steps.
+    Cannot delete an ACTIVE workflow — deactivate it first.
+    DELETE /api/workflows/<workflow_id>/delete/
+    """
+    try:
+        wf = Workflow.objects.get(id=workflow_id)
+    except Workflow.DoesNotExist:
+        return JsonResponse({"error": f"Workflow #{workflow_id} not found"}, status=404)
+
+    # Prevent deleting active workflow
+    if wf.is_active:
+        return JsonResponse({
+            "error": "Cannot delete an active workflow. Deactivate it first by setting is_active to false."
+        }, status=400)
+
+    # Check if any tickets are using this workflow
+    from Tickets.models import Ticket
+    linked_tickets = Ticket.objects.filter(workflow=wf).count()
+    if linked_tickets > 0:
+        return JsonResponse({
+            "error": f"Cannot delete workflow. {linked_tickets} ticket(s) are linked to this workflow."
+        }, status=400)
+
+    workflow_name = wf.workflow_name or f"Workflow #{wf.id}"
+    steps_count   = WorkflowStep.objects.filter(workflow=wf).count()
+
+    # Delete steps first then workflow
+    WorkflowStep.objects.filter(workflow=wf).delete()
+    wf.delete()
+
+    return JsonResponse({
+        "message":       f"Workflow '{workflow_name}' deleted successfully",
+        "workflow_id":   workflow_id,
+        "steps_deleted": steps_count,
+    }, status=200)

@@ -3,6 +3,8 @@ from .views import create_ticket, list_tickets, delete_ticket ,set_ticket_priori
 from . import views
 from . import views_workflow
 
+from .views_workflow import edit_workflow_with_roles, delete_workflow
+
 # from .views import ticket_action 
 
 urlpatterns = [
@@ -41,4 +43,11 @@ urlpatterns = [
 
      # ✅ NEW — Set / update ticket priority (approvers only)
     path("priority/<int:ticket_id>/",    set_ticket_priority,  name="set_ticket_priority"),
+
+
+
+
+# Add to urlpatterns:
+    path("workflows/<int:workflow_id>/edit/",   edit_workflow_with_roles, name="edit_workflow"),
+    path("workflows/<int:workflow_id>/delete/", delete_workflow,          name="delete_workflow"),
 ]
